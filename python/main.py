@@ -42,42 +42,49 @@ def run_crawling(settings: Settings, db: Database, logger):
     logger.info("=" * 60)
     logger.info("크롤링 시작")
     logger.info("=" * 60)
-    
-    keywords = settings.search_keywords.keywords
+
     sites = settings.search_keywords.sites
-    
+
+    # 키워드 정보 로깅
+    logger.info(f"직무 키워드: {settings.search_keywords.job_keywords}")
+    if settings.search_keywords.combine_all:
+        logger.info(f"연차 키워드: {[k for k in settings.search_keywords.experience_keywords if k]}")
+        logger.info(f"지역 키워드: {[k for k in settings.search_keywords.location_keywords if k]}")
+
     total_jobs = 0
-    
+
     for site_name, enabled in sites.items():
         if not enabled:
             logger.info(f"[{site_name}] 비활성화됨 - 건너뜀")
             continue
-        
+
         try:
             crawler = get_crawler(site_name)
             if not crawler:
                 logger.warning(f"[{site_name}] 크롤러를 찾을 수 없음")
                 continue
-            
-            logger.info(f"\n[{site_name}] 크롤링 시작")
-            
+
+            # 사이트별 최적화된 키워드 가져오기
+            keywords = settings.search_keywords.get_keywords_for_site(site_name)
+            logger.info(f"\n[{site_name}] 크롤링 시작 ({len(keywords)}개 키워드)")
+
             for keyword in keywords:
                 logger.info(f"  키워드: {keyword}")
                 try:
                     jobs = crawler.crawl_keyword(keyword)
-                    
+
                     for job in jobs:
                         db.add_job_posting(job)
-                    
+
                     logger.info(f"    → {len(jobs)}개 수집")
                     total_jobs += len(jobs)
-                    
+
                 except Exception as e:
                     logger.error(f"    → 크롤링 실패: {e}")
-                    
+
         except Exception as e:
             logger.error(f"[{site_name}] 크롤러 초기화 실패: {e}")
-    
+
     logger.info(f"\n크롤링 완료: 총 {total_jobs}개 채용공고 수집")
     return total_jobs
 
@@ -343,16 +350,36 @@ def main():
         '--keywords', '-k',
         nargs='+',
         default=None,
-        help='검색 키워드 (공백으로 구분)'
+        help='직무/기술 키워드 (공백으로 구분)'
     )
-    
+
+    parser.add_argument(
+        '--experience', '-e',
+        nargs='+',
+        default=None,
+        help='연차 키워드 (예: 신입 1년차 3년차 경력)'
+    )
+
+    parser.add_argument(
+        '--location', '-l',
+        nargs='+',
+        default=None,
+        help='지역 키워드 (예: 서울 판교 부산 원격)'
+    )
+
+    parser.add_argument(
+        '--combine',
+        action='store_true',
+        help='키워드 조합 모드 활성화 (직무+연차+지역)'
+    )
+
     parser.add_argument(
         '--sites', '-s',
         nargs='+',
         default=None,
         help='크롤링 사이트 (linkedin, wanted, jobkorea, saramin, rocketpunch)'
     )
-    
+
     parser.add_argument(
         '--debug',
         action='store_true',
@@ -377,9 +404,22 @@ def main():
     
     # 명령줄 옵션 적용
     if args.keywords:
-        settings.search_keywords.keywords = args.keywords
-        logger.info(f"키워드 설정: {args.keywords}")
-    
+        settings.search_keywords.job_keywords = args.keywords
+        logger.info(f"직무 키워드 설정: {args.keywords}")
+
+    if args.experience:
+        settings.search_keywords.experience_keywords = [""] + args.experience
+        logger.info(f"연차 키워드 설정: {args.experience}")
+
+    if args.location:
+        settings.search_keywords.location_keywords = [""] + args.location
+        logger.info(f"지역 키워드 설정: {args.location}")
+
+    if args.combine:
+        settings.search_keywords.combine_all = True
+        combined = settings.search_keywords.get_combined_keywords()
+        logger.info(f"키워드 조합 모드 활성화: {len(combined)}개 조합 생성")
+
     if args.sites:
         # 모든 사이트 비활성화 후 지정된 것만 활성화
         for site in settings.search_keywords.sites:

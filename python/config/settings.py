@@ -108,7 +108,8 @@ class SchedulerConfig:
 @dataclass
 class SearchKeywords:
     """검색 키워드 설정"""
-    keywords: list = field(default_factory=lambda: [
+    # 1. 직무/기술 키워드
+    job_keywords: list = field(default_factory=lambda: [
         "데이터 분석가",
         "데이터 엔지니어",
         "머신러닝 엔지니어",
@@ -120,7 +121,30 @@ class SearchKeywords:
         "AI 엔지니어",
         "데이터 사이언티스트"
     ])
-    
+
+    # 2. 연차 키워드
+    experience_keywords: list = field(default_factory=lambda: [
+        "",  # 빈 문자열 = 연차 무관
+        "신입",
+        "1년차",
+        "2년차",
+        "3년차",
+        "5년차",
+        "경력"
+    ])
+
+    # 3. 지역 키워드
+    location_keywords: list = field(default_factory=lambda: [
+        "",  # 빈 문자열 = 지역 무관
+        "서울",
+        "판교",
+        "성남",
+        "강남",
+        "부산",
+        "대전",
+        "원격"
+    ])
+
     # 사이트별 활성화 여부
     sites: dict = field(default_factory=lambda: {
         "linkedin": True,
@@ -129,6 +153,44 @@ class SearchKeywords:
         "saramin": True,
         "rocketpunch": True
     })
+
+    # 조합 옵션
+    combine_all: bool = False  # True: 모든 조합 생성, False: 직무 키워드만 사용
+
+    @property
+    def keywords(self) -> list:
+        """하위 호환성을 위한 속성 - 직무 키워드 반환"""
+        return self.job_keywords
+
+    def get_combined_keywords(self) -> list:
+        """3가지 키워드 조합 생성"""
+        if not self.combine_all:
+            return self.job_keywords
+
+        combined = []
+        for job in self.job_keywords:
+            for exp in self.experience_keywords:
+                for loc in self.location_keywords:
+                    # 빈 문자열 제외하고 조합
+                    parts = [p for p in [job, exp, loc] if p]
+                    keyword = " ".join(parts)
+                    if keyword and keyword not in combined:
+                        combined.append(keyword)
+
+        return combined
+
+    def get_keywords_for_site(self, site: str) -> list:
+        """사이트별 최적화된 키워드 반환
+
+        일부 사이트는 필터 기능이 있어서 직무 키워드만 사용하고
+        연차/지역은 필터로 처리하는 것이 효율적
+        """
+        # Wanted, Saramin 등은 자체 필터가 있음
+        if site in ["wanted", "saramin", "jobkorea"]:
+            return self.job_keywords
+
+        # 필터가 없는 사이트는 조합 키워드 사용
+        return self.get_combined_keywords() if self.combine_all else self.job_keywords
 
 
 class Settings:
@@ -148,20 +210,35 @@ class Settings:
         """JSON 설정 파일에서 로드"""
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        
-        if 'keywords' in config:
-            self.search_keywords.keywords = config['keywords']
+
+        # 새로운 키워드 구조
+        if 'job_keywords' in config:
+            self.search_keywords.job_keywords = config['job_keywords']
+        if 'experience_keywords' in config:
+            self.search_keywords.experience_keywords = config['experience_keywords']
+        if 'location_keywords' in config:
+            self.search_keywords.location_keywords = config['location_keywords']
+        if 'combine_all' in config:
+            self.search_keywords.combine_all = config['combine_all']
+
+        # 하위 호환성: 기존 'keywords' 키 지원
+        if 'keywords' in config and 'job_keywords' not in config:
+            self.search_keywords.job_keywords = config['keywords']
+
         if 'sites' in config:
             self.search_keywords.sites = config['sites']
         if 'crawler' in config:
             for key, value in config['crawler'].items():
                 if hasattr(self.crawler, key):
                     setattr(self.crawler, key, value)
-    
+
     def save_to_file(self, config_file: str):
         """설정을 JSON 파일로 저장"""
         config = {
-            'keywords': self.search_keywords.keywords,
+            'job_keywords': self.search_keywords.job_keywords,
+            'experience_keywords': self.search_keywords.experience_keywords,
+            'location_keywords': self.search_keywords.location_keywords,
+            'combine_all': self.search_keywords.combine_all,
             'sites': self.search_keywords.sites,
             'crawler': {
                 'request_delay': self.crawler.request_delay,
