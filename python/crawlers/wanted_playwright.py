@@ -432,14 +432,20 @@ class WantedPlaywrightCrawler:
     def _get_existing_job_ids(self) -> set:
         """DB에서 기존 job_id 목록 조회"""
         try:
+            self.logger.info("DB에서 기존 job_id 조회 시작...")
             session = db.get_session()
             existing_ids = session.query(JobPosting.job_id).filter(
                 JobPosting.source_site == self.site_name
             ).all()
             session.close()
-            return {row[0] for row in existing_ids}
+            # job_id를 문자열로 변환하여 set 생성
+            result = {str(row[0]) for row in existing_ids if row[0]}
+            self.logger.info(f"DB 조회 완료: {len(result)}개 기존 job_id 발견")
+            return result
         except Exception as e:
-            self.logger.warning(f"기존 job_id 조회 실패: {e}")
+            self.logger.error(f"기존 job_id 조회 실패: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return set()
 
     async def crawl_keyword(self, keyword: str, max_pages: int = None) -> List[Dict]:
@@ -459,9 +465,10 @@ class WantedPlaywrightCrawler:
             # 1. 검색 결과 수집
             jobs = await self.search_jobs(keyword, max_pages)
 
-            # 2. 기존 DB에 없는 채용공고만 필터링
-            new_jobs = [job for job in jobs if job.get('job_id') not in existing_job_ids]
+            # 2. 기존 DB에 없는 채용공고만 필터링 (job_id를 문자열로 비교)
+            new_jobs = [job for job in jobs if str(job.get('job_id', '')) not in existing_job_ids]
             skipped_count = len(jobs) - len(new_jobs)
+            self.logger.info(f"필터링 결과: 전체 {len(jobs)}개 중 신규 {len(new_jobs)}개")
 
             if skipped_count > 0:
                 self.logger.info(f"DB에 이미 존재하는 {skipped_count}개 채용공고 스킵")
