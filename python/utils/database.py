@@ -8,6 +8,14 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from typing import Optional, List
+import pytz
+
+# 한국 시간대
+KST = pytz.timezone('Asia/Seoul')
+
+def get_kst_now():
+    """현재 한국 시간 반환"""
+    return datetime.now(KST)
 import sys
 sys.path.append(str(__file__).rsplit('/', 2)[0])
 
@@ -61,7 +69,7 @@ class JobPosting(Base):
 
     # 메타
     url = Column(String(500))
-    crawled_at = Column(DateTime, default=datetime.now)
+    crawled_at = Column(DateTime, default=get_kst_now)
     posted_at = Column(DateTime)
     expires_at = Column(DateTime)
     is_active = Column(Boolean, default=True)
@@ -100,7 +108,7 @@ class Company(Base):
     employee_count = Column(Integer)
     
     # 메타
-    last_updated = Column(DateTime, default=datetime.now)
+    last_updated = Column(DateTime, default=get_kst_now)
     
     # 관계
     job_postings = relationship("JobPosting", back_populates="company")
@@ -120,7 +128,7 @@ class SkillTrend(Base):
     trend_direction = Column(String(50))  # increasing, stable, decreasing
     
     # 분석 기간
-    analysis_date = Column(DateTime, default=datetime.now)
+    analysis_date = Column(DateTime, default=get_kst_now)
     period_start = Column(DateTime)
     period_end = Column(DateTime)
 
@@ -128,9 +136,9 @@ class SkillTrend(Base):
 class MarketAnalysis(Base):
     """시장 분석 결과 테이블"""
     __tablename__ = 'market_analysis'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    analysis_date = Column(DateTime, default=datetime.now)
+    analysis_date = Column(DateTime, default=get_kst_now)
     keyword = Column(String(200))  # 분석 키워드
     
     # 분석 결과
@@ -188,7 +196,7 @@ class Database:
                 for key, value in filtered_data.items():
                     if hasattr(existing, key):
                         setattr(existing, key, value)
-                existing.crawled_at = datetime.now()
+                existing.crawled_at = get_kst_now()
                 session.commit()
                 session.refresh(existing)
                 session.expunge(existing)
@@ -219,7 +227,7 @@ class Database:
                 for key, value in company_data.items():
                     if hasattr(existing, key) and value is not None:
                         setattr(existing, key, value)
-                existing.last_updated = datetime.now()
+                existing.last_updated = get_kst_now()
                 session.commit()
                 return existing
             else:
@@ -255,7 +263,7 @@ class Database:
             
             # 최근 N일 데이터
             from datetime import timedelta
-            cutoff = datetime.now() - timedelta(days=days)
+            cutoff = get_kst_now() - timedelta(days=days)
             query = query.filter(JobPosting.crawled_at >= cutoff)
             
             return query.all()
