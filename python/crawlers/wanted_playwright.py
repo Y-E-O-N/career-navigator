@@ -100,15 +100,19 @@ class WantedPlaywrightCrawler:
             # 핵심 셀렉터: data-position-id 속성이 있는 a 태그
             job_card_selector = 'a[data-position-id]'
 
-            # 채용공고 카드 대기
+            # 채용공고 카드 대기 (state='attached'로 DOM 존재만 확인)
             try:
-                await page.wait_for_selector(job_card_selector, timeout=15000)
+                await page.wait_for_selector(job_card_selector, state='attached', timeout=15000)
                 self.logger.info("채용공고 카드 발견")
             except Exception as e:
                 self.logger.warning(f"채용공고 카드 대기 타임아웃: {e}")
-                # 디버그 스크린샷 저장
-                await self._save_debug_files(page, 'search')
-                return []
+                # 그래도 요소가 있는지 직접 확인
+                cards = await page.query_selector_all(job_card_selector)
+                if cards:
+                    self.logger.info(f"타임아웃됐지만 {len(cards)}개 카드 발견, 계속 진행")
+                else:
+                    await self._save_debug_files(page, 'search')
+                    return []
 
             # 스크롤하며 더 많은 결과 로드
             prev_count = 0
