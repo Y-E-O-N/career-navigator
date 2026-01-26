@@ -27,6 +27,11 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS work_address VARCHAR(500);
 -- 회사 산업분야 (채용공고에서 추출)
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS company_industry VARCHAR(200);
 
+-- Wanted 외부 ID (data 속성에서 추출)
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS wanted_company_id VARCHAR(50);
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS wanted_position_id VARCHAR(50);
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS wanted_job_category_id VARCHAR(50);
+
 -- =============================================================================
 -- 인덱스 추가
 -- =============================================================================
@@ -34,3 +39,5 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS company_industry VARCHAR(200);
 CREATE INDEX IF NOT EXISTS idx_job_postings_experience_level ON job_postings(experience_level);
 CREATE INDEX IF NOT EXISTS idx_job_postings_deadline ON job_postings(deadline);
 CREATE INDEX IF NOT EXISTS idx_job_postings_company_tags ON job_postings USING gin(company_tags);
+CREATE INDEX IF NOT EXISTS idx_job_postings_wanted_company_id ON job_postings(wanted_company_id);
+CREATE INDEX IF NOT EXISTS idx_job_postings_employment_type ON job_postings(employment_type);

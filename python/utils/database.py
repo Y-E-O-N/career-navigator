@@ -54,6 +54,11 @@ class JobPosting(Base):
     work_address = Column(String(500))  # 상세 근무지 주소
     company_industry = Column(String(200))  # 회사 산업분야
 
+    # Wanted 외부 ID (data 속성에서 추출)
+    wanted_company_id = Column(String(50))  # Wanted 회사 ID
+    wanted_position_id = Column(String(50))  # Wanted 포지션 ID
+    wanted_job_category_id = Column(String(50))  # Wanted 직무 카테고리 ID
+
     # 메타
     url = Column(String(500))
     crawled_at = Column(DateTime, default=datetime.now)

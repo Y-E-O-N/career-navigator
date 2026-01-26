@@ -264,12 +264,48 @@ class WantedPlaywrightCrawler:
                 if industry_elem:
                     detail['company_industry'] = clean_text(await industry_elem.inner_text())
 
-            # 직무 카테고리 (data 속성에서 추출)
-            bookmark_btn = await page.query_selector('[data-job-category]')
+            # data 속성에서 상세 정보 추출 (북마크 버튼에서)
+            bookmark_btn = await page.query_selector('[class*="BookmarkBtn"] button, button[data-attribute-id="position__bookmark__click"]')
             if bookmark_btn:
+                # 회사 정보
+                company_id = await bookmark_btn.get_attribute('data-company-id')
+                if company_id:
+                    detail['wanted_company_id'] = company_id
+
+                company_name = await bookmark_btn.get_attribute('data-company-name')
+                if company_name and not detail.get('company_name'):
+                    detail['company_name'] = company_name
+
+                # 포지션 정보
+                position_id = await bookmark_btn.get_attribute('data-position-id')
+                if position_id:
+                    detail['wanted_position_id'] = position_id
+
+                position_name = await bookmark_btn.get_attribute('data-position-name')
+                if position_name and not detail.get('title'):
+                    detail['title'] = position_name
+
+                # 고용 형태 (regular, contract 등)
+                employment_type = await bookmark_btn.get_attribute('data-position-employment-type')
+                if employment_type:
+                    # 영문을 한글로 변환
+                    employment_map = {
+                        'regular': '정규직',
+                        'contract': '계약직',
+                        'intern': '인턴',
+                        'freelance': '프리랜서',
+                        'part-time': '파트타임'
+                    }
+                    detail['employment_type'] = employment_map.get(employment_type, employment_type)
+
+                # 직무 카테고리
                 job_category = await bookmark_btn.get_attribute('data-job-category')
                 if job_category:
                     detail['job_category'] = job_category
+
+                job_category_id = await bookmark_btn.get_attribute('data-job-category-id')
+                if job_category_id:
+                    detail['wanted_job_category_id'] = job_category_id
 
             # 스킬 추출 (설명에서)
             if detail.get('requirements') or detail.get('description'):
