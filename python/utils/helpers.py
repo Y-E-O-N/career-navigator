@@ -60,18 +60,71 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
     return decorator
 
 
-def clean_text(text: str) -> str:
-    """텍스트 정리"""
+def html_to_text(html: str) -> str:
+    """HTML을 줄바꿈이 유지된 텍스트로 변환"""
+    if not html:
+        return ""
+
+    # <br>, <br/>, <br /> 태그를 줄바꿈으로 변환
+    text = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
+
+    # 블록 요소 뒤에 줄바꿈 추가
+    block_tags = r'</?(p|div|li|h[1-6]|tr|section|article)[^>]*>'
+    text = re.sub(block_tags, '\n', text, flags=re.IGNORECASE)
+
+    # 나머지 HTML 태그 제거
+    text = re.sub(r'<[^>]+>', '', text)
+
+    # HTML 엔티티 디코딩
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&quot;', '"')
+    text = text.replace('&#39;', "'")
+
+    # 각 줄 정리
+    lines = text.split('\n')
+    cleaned_lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in lines]
+
+    # 연속 빈 줄을 하나로
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text.strip()
+
+
+def clean_text(text: str, preserve_newlines: bool = True) -> str:
+    """텍스트 정리
+
+    Args:
+        text: 정리할 텍스트
+        preserve_newlines: True면 줄바꿈 유지, False면 모든 공백을 스페이스로 변환
+    """
     if not text:
         return ""
-    
+
     # HTML 태그 제거
     text = re.sub(r'<[^>]+>', '', text)
-    # 연속 공백 제거
-    text = re.sub(r'\s+', ' ', text)
+
+    if preserve_newlines:
+        # 줄바꿈은 유지하면서 각 줄의 연속 공백만 제거
+        lines = text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # 각 줄에서 연속 공백을 단일 공백으로
+            cleaned_line = re.sub(r'[ \t]+', ' ', line).strip()
+            cleaned_lines.append(cleaned_line)
+        # 연속된 빈 줄은 하나로 줄임
+        text = '\n'.join(cleaned_lines)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+    else:
+        # 기존 동작: 모든 공백을 단일 스페이스로
+        text = re.sub(r'\s+', ' ', text)
+
     # 앞뒤 공백 제거
     text = text.strip()
-    
+
     return text
 
 
