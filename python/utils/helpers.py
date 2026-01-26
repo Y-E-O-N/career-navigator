@@ -15,25 +15,30 @@ import json
 def setup_logger(name: str, log_file: Optional[str] = None, log_level: str = 'INFO') -> logging.Logger:
     """로거 설정"""
     logger = logging.getLogger(name)
+
+    # 이미 핸들러가 있으면 추가하지 않음 (중복 방지)
+    if logger.handlers:
+        return logger
+
     level = getattr(logging, log_level.upper(), logging.INFO)
     logger.setLevel(level)
-    
+
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # 콘솔 핸들러
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
+
     # 파일 핸들러
     if log_file:
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-    
+
     return logger
 
 
