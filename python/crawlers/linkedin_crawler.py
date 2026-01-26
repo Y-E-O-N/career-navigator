@@ -16,6 +16,7 @@ from typing import List, Dict, Optional
 from urllib.parse import quote, urlencode
 
 from .base_crawler import BaseCrawler
+from config.settings import settings
 from utils.helpers import clean_text, extract_skills_from_text, categorize_job_level
 
 
@@ -231,7 +232,7 @@ class LinkedInCrawler(BaseCrawler):
         검색 결과만 수집하고 스킬은 제목/설명에서 추출
         """
         if max_pages is None:
-            max_pages = self.config.max_pages_per_keyword
+            max_pages = settings.crawler.max_pages_per_keyword
         
         self.logger.info(f"LinkedIn 크롤링 시작: {keyword}")
         

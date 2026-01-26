@@ -14,6 +14,7 @@ from typing import List, Dict, Optional
 from urllib.parse import urlencode, quote
 
 from .base_crawler import BaseCrawler
+from config.settings import settings
 from utils.helpers import clean_text, extract_skills_from_text, categorize_job_level
 
 
@@ -319,7 +320,7 @@ class RocketPunchCrawler(BaseCrawler):
         """키워드로 전체 크롤링 실행"""
         
         if max_pages is None:
-            max_pages = self.config.max_pages_per_keyword
+            max_pages = settings.crawler.max_pages_per_keyword
         
         self.logger.info(f"RocketPunch 크롤링 시작: {keyword}")
         
