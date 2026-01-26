@@ -1,0 +1,6 @@
+name = "career-navigator"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Environment variables will be set via Cloudflare dashboard or wrangler secrets

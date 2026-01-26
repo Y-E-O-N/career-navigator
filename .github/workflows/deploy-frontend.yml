@@ -31,9 +31,9 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Build application
+      - name: Build for Cloudflare Pages
         working-directory: web
-        run: npm run build
+        run: npm run pages:build
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -44,4 +44,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy web/.next --project-name=career-navigator
+          command: pages deploy web/.vercel/output/static --project-name=career-navigator

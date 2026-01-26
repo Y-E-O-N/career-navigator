@@ -13,7 +13,8 @@ psycopg2-binary>=2.9.0  # PostgreSQL (optional)
 apscheduler>=3.10.0
 
 # LLM Integration
-anthropic>=0.39.0  # Claude API
+google-generativeai>=0.8.0  # Gemini API (primary)
+anthropic>=0.39.0  # Claude API (optional)
 openai>=1.0.0      # OpenAI API (optional)
 
 # Data Processing

@@ -1,6 +1,6 @@
 """
 LLM 기반 분석 모듈
-Claude/OpenAI API를 활용한 고급 분석 및 로드맵 생성
+Gemini/Claude/OpenAI API를 활용한 고급 분석 및 로드맵 생성
 """
 
 from typing import Dict, Any, Optional, List
@@ -15,6 +15,12 @@ from config.settings import settings
 from utils.helpers import setup_logger
 
 # API 클라이언트 임포트 (선택적)
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 try:
     import anthropic
     ANTHROPIC_AVAILABLE = True
@@ -41,14 +47,23 @@ class LLMAnalyzer:
     
     def _init_client(self):
         """API 클라이언트 초기화"""
-        if self.provider == "anthropic" and ANTHROPIC_AVAILABLE:
+        if self.provider == "gemini" and GEMINI_AVAILABLE:
+            api_key = settings.analyzer.gemini_api_key
+            if api_key:
+                genai.configure(api_key=api_key)
+                self.client = genai.GenerativeModel('gemini-2.0-flash')
+                self.logger.info("Initialized Gemini client")
+            else:
+                self.logger.warning("Gemini API key not set")
+
+        elif self.provider == "anthropic" and ANTHROPIC_AVAILABLE:
             api_key = settings.analyzer.anthropic_api_key
             if api_key:
                 self.client = anthropic.Anthropic(api_key=api_key)
                 self.logger.info("Initialized Anthropic client")
             else:
                 self.logger.warning("Anthropic API key not set")
-                
+
         elif self.provider == "openai" and OPENAI_AVAILABLE:
             api_key = settings.analyzer.openai_api_key
             if api_key:
@@ -65,9 +80,21 @@ class LLMAnalyzer:
         if not self.client:
             self.logger.warning("LLM client not initialized")
             return None
-        
+
         try:
-            if self.provider == "anthropic":
+            if self.provider == "gemini":
+                # Gemini는 system prompt를 프롬프트에 포함
+                full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                response = self.client.generate_content(
+                    full_prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        max_output_tokens=max_tokens,
+                        temperature=0.7,
+                    )
+                )
+                return response.text
+
+            elif self.provider == "anthropic":
                 message = self.client.messages.create(
                     model="claude-sonnet-4-20250514",
                     max_tokens=max_tokens,
@@ -77,7 +104,7 @@ class LLMAnalyzer:
                     ]
                 )
                 return message.content[0].text
-                
+
             elif self.provider == "openai":
                 response = self.client.ChatCompletion.create(
                     model="gpt-4",
@@ -88,7 +115,7 @@ class LLMAnalyzer:
                     ]
                 )
                 return response.choices[0].message.content
-                
+
         except Exception as e:
             self.logger.error(f"LLM API call failed: {e}")
             return None

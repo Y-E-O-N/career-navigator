@@ -12,10 +12,11 @@ import hashlib
 import json
 
 # 로깅 설정
-def setup_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
+def setup_logger(name: str, log_file: Optional[str] = None, log_level: str = 'INFO') -> logging.Logger:
     """로거 설정"""
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logger.setLevel(level)
     
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -23,6 +24,7 @@ def setup_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
     
     # 콘솔 핸들러
     console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     

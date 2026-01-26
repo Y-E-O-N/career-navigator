@@ -9,8 +9,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 import json
 
+# .env 파일 로드
+from dotenv import load_dotenv
+
 # 프로젝트 루트 경로
 PROJECT_ROOT = Path(__file__).parent.parent
+
+# .env 파일 로드 (프로젝트 루트에서)
+load_dotenv(PROJECT_ROOT / '.env')
 DATA_DIR = PROJECT_ROOT / "data"
 REPORTS_DIR = PROJECT_ROOT / "reports"
 
@@ -79,11 +85,12 @@ class DatabaseConfig:
 @dataclass
 class AnalyzerConfig:
     """분석기 설정"""
-    # LLM API 설정 (Anthropic Claude 또는 OpenAI)
-    llm_provider: str = os.getenv("LLM_PROVIDER", "anthropic")  # anthropic, openai
+    # LLM API 설정 (Gemini, Anthropic Claude, OpenAI)
+    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")  # gemini, anthropic, openai
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    
+
     # 분석 설정
     min_job_count_for_trend: int = 5  # 트렌드 분석을 위한 최소 채용공고 수
     skill_extraction_enabled: bool = True

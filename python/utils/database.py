@@ -137,10 +137,11 @@ class MarketAnalysis(Base):
 
 class Database:
     """데이터베이스 관리 클래스"""
-    
-    def __init__(self):
+
+    def __init__(self, connection_string: Optional[str] = None):
+        conn_str = connection_string or settings.database.connection_string
         self.engine = create_engine(
-            settings.database.get_connection_string(),
+            conn_str,
             echo=False,
             pool_pre_ping=True
         )
@@ -158,15 +159,19 @@ class Database:
         """채용공고 추가"""
         session = self.get_session()
         try:
+            # JobPosting 모델에 있는 필드만 필터링
+            valid_fields = {c.name for c in JobPosting.__table__.columns}
+            filtered_data = {k: v for k, v in job_data.items() if k in valid_fields}
+
             # 중복 체크
             existing = session.query(JobPosting).filter_by(
-                source_site=job_data.get('source_site'),
-                job_id=job_data.get('job_id')
+                source_site=filtered_data.get('source_site'),
+                job_id=filtered_data.get('job_id')
             ).first()
 
             if existing:
                 # 업데이트
-                for key, value in job_data.items():
+                for key, value in filtered_data.items():
                     if hasattr(existing, key):
                         setattr(existing, key, value)
                 existing.crawled_at = datetime.now()
@@ -176,7 +181,7 @@ class Database:
                 return existing
             else:
                 # 새로 추가
-                job = JobPosting(**job_data)
+                job = JobPosting(**filtered_data)
                 session.add(job)
                 session.commit()
                 session.refresh(job)
