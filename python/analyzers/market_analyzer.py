@@ -18,9 +18,10 @@ from utils.helpers import setup_logger, extract_skills_from_text
 
 class MarketAnalyzer:
     """채용 시장 분석기"""
-    
-    def __init__(self):
+
+    def __init__(self, database=None):
         self.logger = setup_logger("analyzer.market")
+        self.db = database if database else db
     
     def analyze_keyword(self, keyword: str, days: int = 30) -> Dict[str, Any]:
         """
@@ -34,9 +35,9 @@ class MarketAnalyzer:
             분석 결과 딕셔너리
         """
         self.logger.info(f"Analyzing market for keyword: {keyword}")
-        
+
         # 데이터 조회
-        jobs = db.get_job_postings(keyword=keyword, days=days)
+        jobs = self.db.get_job_postings(keyword=keyword, days=days)
         
         if not jobs:
             return {'error': 'No job postings found', 'keyword': keyword}
@@ -46,8 +47,9 @@ class MarketAnalyzer:
             'analysis_date': datetime.now().isoformat(),
             'period_days': days,
             'total_postings': len(jobs),
+            'unique_companies': len(set(j.company_name for j in jobs)),
         }
-        
+
         # 기본 통계
         analysis['statistics'] = self._calculate_statistics(jobs)
         
@@ -225,7 +227,7 @@ class MarketAnalyzer:
             end_date = datetime.now() - timedelta(days=i * period_days)
             start_date = end_date - timedelta(days=period_days)
             
-            session = db.get_session()
+            session = self.db.get_session()
             try:
                 jobs = session.query(JobPosting).filter(
                     JobPosting.crawled_at >= start_date,
