@@ -16,7 +16,8 @@ from utils.helpers import setup_logger
 
 # API 클라이언트 임포트 (선택적)
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
@@ -50,8 +51,8 @@ class LLMAnalyzer:
         if self.provider == "gemini" and GEMINI_AVAILABLE:
             api_key = settings.analyzer.gemini_api_key
             if api_key:
-                genai.configure(api_key=api_key)
-                self.client = genai.GenerativeModel('gemini-2.0-flash')
+                self.client = genai.Client(api_key=api_key)
+                self.gemini_model = 'gemini-2.0-flash'
                 self.logger.info("Initialized Gemini client")
             else:
                 self.logger.warning("Gemini API key not set")
@@ -83,11 +84,12 @@ class LLMAnalyzer:
 
         try:
             if self.provider == "gemini":
-                # Gemini는 system prompt를 프롬프트에 포함
+                # Gemini - 새 google.genai API 사용
                 full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-                response = self.client.generate_content(
-                    full_prompt,
-                    generation_config=genai.types.GenerationConfig(
+                response = self.client.models.generate_content(
+                    model=self.gemini_model,
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
                         max_output_tokens=max_tokens,
                         temperature=0.7,
                     )
