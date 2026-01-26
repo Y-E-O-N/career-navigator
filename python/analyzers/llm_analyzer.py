@@ -52,7 +52,7 @@ class LLMAnalyzer:
             api_key = settings.analyzer.gemini_api_key
             if api_key:
                 self.client = genai.Client(api_key=api_key)
-                self.gemini_model = 'gemini-2.0-flash'
+                self.gemini_model = 'gemini-3-flash-preview'
                 self.logger.info("Initialized Gemini client")
             else:
                 self.logger.warning("Gemini API key not set")
