@@ -32,6 +32,7 @@ class WantedPlaywrightCrawler:
         self.base_url = 'https://www.wanted.co.kr'
         self.search_url = 'https://www.wanted.co.kr/search'
         self.logger = setup_logger(f"crawler.{self.site_name}")
+        self.playwright = None
         self.browser: Optional[Browser] = None
         self.request_delay = settings.crawler.request_delay
 
@@ -40,14 +41,21 @@ class WantedPlaywrightCrawler:
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError("playwright가 설치되어 있지 않습니다. 'pip install playwright && playwright install chromium' 실행하세요.")
 
-        playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch(headless=headless)
+        if self.browser:
+            return  # 이미 초기화됨
+
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=headless)
         self.logger.info("브라우저 초기화 완료")
 
     async def close_browser(self):
         """브라우저 종료"""
         if self.browser:
             await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
             self.logger.info("브라우저 종료")
 
     async def search_jobs(self, keyword: str, max_pages: int = 5) -> List[Dict]:
@@ -68,23 +76,41 @@ class WantedPlaywrightCrawler:
         jobs = []
 
         try:
-            # 검색 페이지로 이동
-            search_url = f"{self.search_url}?query={quote(keyword)}&tab=position"
+            # 검색 페이지로 이동 (search_method=direct 추가)
+            search_url = f"{self.search_url}?query={quote(keyword)}&tab=position&search_method=direct"
             self.logger.info(f"검색 URL: {search_url}")
 
             await page.goto(search_url, wait_until='domcontentloaded')
             await asyncio.sleep(3)  # 초기 로딩 대기
 
-            # 페이지 로드 확인
-            await page.wait_for_selector('a[href*="/wd/"]', timeout=10000)
+            # 페이지 로드 확인 (타임아웃 처리 개선)
+            try:
+                await page.wait_for_selector('a[href*="/wd/"]', timeout=15000)
+            except Exception as wait_error:
+                self.logger.warning(f"채용공고 링크 대기 타임아웃: {wait_error}")
+                # 다른 셀렉터로 시도
+                try:
+                    await page.wait_for_selector('[class*="JobCard"]', timeout=5000)
+                except:
+                    # 페이지 상태 디버깅
+                    page_title = await page.title()
+                    page_url = page.url
+                    self.logger.warning(f"현재 페이지: {page_title} ({page_url})")
+
+                    # HTML 일부 출력 (디버깅용)
+                    body_html = await page.inner_html('body')
+                    self.logger.debug(f"페이지 HTML 앞부분: {body_html[:1000]}...")
 
             # 스크롤하며 더 많은 결과 로드
             prev_count = 0
             for scroll_count in range(max_pages):
-                # 현재 페이지의 채용공고 링크 수집
+                # 현재 페이지의 채용공고 링크 수집 (여러 셀렉터 시도)
                 job_links = await page.query_selector_all('a[href*="/wd/"]')
-                current_count = len(job_links)
+                if not job_links:
+                    # 대체 셀렉터 시도
+                    job_links = await page.query_selector_all('[class*="JobCard"] a')
 
+                current_count = len(job_links)
                 self.logger.info(f"스크롤 {scroll_count + 1}: {current_count}개 링크 발견")
 
                 # 스크롤 다운
@@ -100,7 +126,11 @@ class WantedPlaywrightCrawler:
 
             # 모든 채용공고 링크에서 정보 추출
             job_links = await page.query_selector_all('a[href*="/wd/"]')
+            self.logger.info(f"총 {len(job_links)}개 링크 수집됨")
 
+            # 링크 파싱
+            parse_success = 0
+            parse_fail = 0
             for link in job_links:
                 try:
                     job = await self._parse_job_link(link)
@@ -108,13 +138,19 @@ class WantedPlaywrightCrawler:
                         # 중복 제거
                         if not any(j['job_id'] == job['job_id'] for j in jobs):
                             jobs.append(job)
+                            parse_success += 1
+                    else:
+                        parse_fail += 1
                 except Exception as e:
+                    parse_fail += 1
                     self.logger.debug(f"링크 파싱 실패: {e}")
 
-            self.logger.info(f"검색 완료: {len(jobs)}개 채용공고 발견")
+            self.logger.info(f"검색 완료: {len(jobs)}개 채용공고 발견 (파싱 성공: {parse_success}, 실패: {parse_fail})")
 
         except Exception as e:
             self.logger.error(f"검색 실패: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
         finally:
             await page.close()
@@ -127,34 +163,63 @@ class WantedPlaywrightCrawler:
             # href에서 job_id 추출
             href = await link.get_attribute('href')
             if not href:
+                self.logger.debug("링크에 href 없음")
                 return None
 
             match = re.search(r'/wd/(\d+)', href)
             if not match:
+                self.logger.debug(f"job_id 추출 실패: {href}")
                 return None
 
             job_id = match.group(1)
             url = f"{self.base_url}/wd/{job_id}"
 
-            # 링크 내부의 카드 컨텐츠에서 정보 추출
-            # 제목
-            title_elem = await link.query_selector('[class*="JobCard_title"], strong')
-            title = await title_elem.inner_text() if title_elem else ''
+            # 링크 전체 텍스트에서 정보 추출 시도
+            full_text = await link.inner_text()
+            text_lines = [line.strip() for line in full_text.split('\n') if line.strip()]
+
+            # 제목 추출 시도 (여러 방법)
+            title = ''
+            title_elem = await link.query_selector('[class*="JobCard_title"], [class*="title"], strong, h2, h3')
+            if title_elem:
+                title = await title_elem.inner_text()
+            elif text_lines:
+                # 첫 번째 줄이 보통 제목
+                title = text_lines[0]
 
             if not title:
-                return None
+                # 제목이 없어도 job_id가 있으면 일단 수집 (상세 페이지에서 가져올 수 있음)
+                self.logger.debug(f"제목 없이 수집: job_id={job_id}")
+                return {
+                    'source_site': self.site_name,
+                    'job_id': job_id,
+                    'title': '',  # 상세 페이지에서 채워짐
+                    'company_name': '',
+                    'url': url
+                }
 
-            # 회사명
-            company_elem = await link.query_selector('[class*="CompanyNameWithLocationPeriod__company"], [class*="company"]')
-            company_name = await company_elem.inner_text() if company_elem else ''
+            # 회사명 추출
+            company_name = ''
+            company_elem = await link.query_selector('[class*="company"], [class*="Company"]')
+            if company_elem:
+                company_name = await company_elem.inner_text()
+            elif len(text_lines) > 1:
+                # 두 번째 줄이 보통 회사명
+                company_name = text_lines[1]
 
             # 경력/위치 정보
-            location_elem = await link.query_selector('[class*="CompanyNameWithLocationPeriod__location"], [class*="location"]')
-            experience_level = await location_elem.inner_text() if location_elem else ''
+            experience_level = ''
+            location_elem = await link.query_selector('[class*="location"], [class*="Location"], [class*="period"]')
+            if location_elem:
+                experience_level = await location_elem.inner_text()
+            elif len(text_lines) > 2:
+                experience_level = text_lines[2]
 
             # 보상금
-            reward_elem = await link.query_selector('[class*="JobCard_reward"], [class*="reward"]')
-            reward_info = await reward_elem.inner_text() if reward_elem else ''
+            reward_info = ''
+            reward_elem = await link.query_selector('[class*="reward"], [class*="Reward"]')
+            if reward_elem:
+                reward_info = await reward_elem.inner_text()
 
             return {
                 'source_site': self.site_name,
@@ -168,6 +233,8 @@ class WantedPlaywrightCrawler:
 
         except Exception as e:
             self.logger.debug(f"링크 파싱 오류: {e}")
+            import traceback
+            self.logger.debug(traceback.format_exc())
             return None
 
     async def get_job_detail(self, job_id: str) -> Optional[Dict]:
