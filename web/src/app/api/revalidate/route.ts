@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import config from '@/config';
 
-// Cloudflare Pages Edge Runtime
-export const runtime = 'edge';
-
 export async function POST(request: NextRequest) {
   const secret = request.headers.get('x-revalidate-secret');
 

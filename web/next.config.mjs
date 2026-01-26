@@ -1,13 +1,12 @@
-import { setupDevPlatform } from '@cloudflare/next-on-pages/next-dev';
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
-// Cloudflare Pages development setup
-if (process.env.NODE_ENV === 'development') {
-  await setupDevPlatform();
+// Development setup for Cloudflare
+if (process.env.NODE_ENV === "development") {
+  initOpenNextCloudflareForDev();
 }
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Cloudflare Pages 호환 설정
   images: {
     unoptimized: true,
   },

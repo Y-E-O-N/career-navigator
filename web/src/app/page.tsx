@@ -6,10 +6,7 @@ import Link from 'next/link';
 import config from '@/config';
 import type { JobPosting, MarketAnalysis, SkillTrend } from '@/lib/supabase/types';
 
-// Cloudflare Pages Edge Runtime
-export const runtime = 'edge';
-
-// ISR 재검증 주기 (초) - config.cache.dashboard와 동일하게 유지
+// ISR 재검증 주기 (초)
 export const revalidate = 3600;
 
 interface DashboardData {

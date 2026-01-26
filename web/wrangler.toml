@@ -1,6 +1,12 @@
 name = "career-navigator"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+# OpenNext build output
+main = ".open-next/worker.js"
+
+# Assets
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
 [vars]
-# Environment variables will be set via Cloudflare dashboard or wrangler secrets
+# Environment variables set via Cloudflare dashboard
