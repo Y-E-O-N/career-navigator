@@ -1,0 +1,29 @@
+# Job Market Analyzer Dependencies
+
+# Web Scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0  # PostgreSQL (optional)
+
+# Scheduling
+apscheduler>=3.10.0
+
+# LLM Integration
+anthropic>=0.39.0  # Claude API
+openai>=1.0.0      # OpenAI API (optional)
+
+# Data Processing
+pandas>=2.0.0  # Optional: for advanced data analysis
+
+# Utilities
+python-dotenv>=1.0.0  # Environment variables
+pytz>=2024.1         # Timezone handling
+
+# Development
+pytest>=7.0.0
+black>=23.0.0
+flake8>=6.0.0
