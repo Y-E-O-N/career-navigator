@@ -5,6 +5,10 @@ Wanted 채용공고 크롤러 (Playwright 버전)
 
 Playwright를 사용하여 동적 페이지를 크롤링합니다.
 검색 결과 목록과 상세 페이지 모두 수집합니다.
+
+HTML 구조 (2024년 기준):
+- 검색 결과: a[data-position-id] 태그에 모든 정보 포함
+- 상세 페이지: section.JobContent_JobContent 내부
 """
 
 import re
@@ -37,7 +41,7 @@ class WantedPlaywrightCrawler:
         self.logger = setup_logger(f"crawler.{self.site_name}")
         self.playwright = None
         self.browser: Optional[Browser] = None
-        self.context = None  # 브라우저 컨텍스트 추가
+        self.context = None
         self.request_delay = settings.crawler.request_delay
 
     async def init_browser(self, headless: bool = True):
@@ -46,12 +50,12 @@ class WantedPlaywrightCrawler:
             raise ImportError("playwright가 설치되어 있지 않습니다. 'pip install playwright && playwright install chromium' 실행하세요.")
 
         if self.browser:
-            return  # 이미 초기화됨
+            return
 
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=headless)
 
-        # 브라우저 컨텍스트 생성 (User-Agent, viewport 설정)
+        # 브라우저 컨텍스트 생성
         self.context = await self.browser.new_context(
             user_agent=self.USER_AGENT,
             viewport={'width': 1920, 'height': 1080},
@@ -77,73 +81,33 @@ class WantedPlaywrightCrawler:
         """
         Wanted 채용공고 검색
 
-        Args:
-            keyword: 검색 키워드
-            max_pages: 최대 스크롤 횟수
-
-        Returns:
-            채용공고 목록 (기본 정보만)
+        검색 결과의 a[data-position-id] 태그에서 모든 정보를 추출합니다.
         """
         if not self.browser:
             await self.init_browser()
 
-        # 컨텍스트에서 새 페이지 생성
         page = await self.context.new_page()
         jobs = []
 
         try:
-            # 검색 페이지로 이동
             search_url = f"{self.search_url}?query={quote(keyword)}&tab=position"
             self.logger.info(f"검색 URL: {search_url}")
 
-            # domcontentloaded 사용 (networkidle은 analytics 때문에 타임아웃됨)
+            # 페이지 로드
             await page.goto(search_url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(5)  # React 렌더링 대기
 
-            # React 렌더링 완료 대기
-            await asyncio.sleep(5)
+            # 핵심 셀렉터: data-position-id 속성이 있는 a 태그
+            job_card_selector = 'a[data-position-id]'
 
-            # 여러 셀렉터로 채용공고 카드 존재 확인
-            card_selectors = [
-                'a[href*="/wd/"]',
-                '[class*="JobCard"]',
-                '[class*="job-card"]',
-                '[data-cy="job-card"]',
-                'div[class*="position"]',
-            ]
-
-            found_selector = None
-            for selector in card_selectors:
-                try:
-                    await page.wait_for_selector(selector, timeout=5000)
-                    count = len(await page.query_selector_all(selector))
-                    if count > 0:
-                        found_selector = selector
-                        self.logger.info(f"셀렉터 '{selector}'로 {count}개 요소 발견")
-                        break
-                except:
-                    continue
-
-            if not found_selector:
-                # 디버깅: 페이지 상태 저장
-                page_title = await page.title()
-                page_url = page.url
-                self.logger.warning(f"채용공고를 찾을 수 없음. 페이지: {page_title} ({page_url})")
-
-                # 스크린샷 저장 (GitHub Actions 아티팩트로 확인 가능)
-                try:
-                    import os
-                    os.makedirs('logs', exist_ok=True)
-                    await page.screenshot(path='logs/wanted_search_debug.png', full_page=True)
-                    self.logger.info("디버그 스크린샷 저장: logs/wanted_search_debug.png")
-
-                    # HTML 저장
-                    html_content = await page.content()
-                    with open('logs/wanted_search_debug.html', 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    self.logger.info("디버그 HTML 저장: logs/wanted_search_debug.html")
-                except Exception as debug_err:
-                    self.logger.warning(f"디버그 파일 저장 실패: {debug_err}")
-
+            # 채용공고 카드 대기
+            try:
+                await page.wait_for_selector(job_card_selector, timeout=15000)
+                self.logger.info("채용공고 카드 발견")
+            except Exception as e:
+                self.logger.warning(f"채용공고 카드 대기 타임아웃: {e}")
+                # 디버그 스크린샷 저장
+                await self._save_debug_files(page, 'search')
                 return []
 
             # 스크롤하며 더 많은 결과 로드
@@ -151,25 +115,21 @@ class WantedPlaywrightCrawler:
             no_change_count = 0
 
             for scroll_count in range(max_pages):
-                # 현재 채용공고 링크 수집
-                job_links = await page.query_selector_all('a[href*="/wd/"]')
-                current_count = len(job_links)
-
-                self.logger.info(f"스크롤 {scroll_count + 1}: {current_count}개 링크 발견")
+                job_cards = await page.query_selector_all(job_card_selector)
+                current_count = len(job_cards)
+                self.logger.info(f"스크롤 {scroll_count + 1}: {current_count}개 카드 발견")
 
                 # 스크롤 다운
                 await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
-
-                # 새 컨텐츠 로드 대기
                 await asyncio.sleep(self.request_delay + 1)
 
-                # 새로운 링크 확인
-                new_links = await page.query_selector_all('a[href*="/wd/"]')
-                new_count = len(new_links)
+                # 새 카드 확인
+                new_cards = await page.query_selector_all(job_card_selector)
+                new_count = len(new_cards)
 
                 if new_count == current_count:
                     no_change_count += 1
-                    if no_change_count >= 2:  # 2회 연속 변화 없으면 종료
+                    if no_change_count >= 2:
                         self.logger.info("더 이상 새로운 결과 없음")
                         break
                 else:
@@ -177,141 +137,117 @@ class WantedPlaywrightCrawler:
 
                 prev_count = new_count
 
-            # 최종 채용공고 링크 수집
-            job_links = await page.query_selector_all('a[href*="/wd/"]')
-            self.logger.info(f"총 {len(job_links)}개 링크 수집됨")
+            # 최종 카드 수집
+            job_cards = await page.query_selector_all(job_card_selector)
+            self.logger.info(f"총 {len(job_cards)}개 카드 수집됨")
 
-            # 링크 파싱
-            parse_success = 0
-            parse_fail = 0
+            # 각 카드에서 정보 추출 (data 속성 활용)
             seen_ids = set()
-
-            for link in job_links:
+            for card in job_cards:
                 try:
-                    job = await self._parse_job_link(link)
+                    job = await self._parse_job_card(card)
                     if job and job.get('job_id'):
-                        job_id = job['job_id']
-                        # 중복 제거
-                        if job_id not in seen_ids:
-                            seen_ids.add(job_id)
+                        if job['job_id'] not in seen_ids:
+                            seen_ids.add(job['job_id'])
                             jobs.append(job)
-                            parse_success += 1
-                    else:
-                        parse_fail += 1
                 except Exception as e:
-                    parse_fail += 1
-                    self.logger.debug(f"링크 파싱 실패: {e}")
+                    self.logger.debug(f"카드 파싱 실패: {e}")
 
-            self.logger.info(f"검색 완료: {len(jobs)}개 채용공고 (파싱 성공: {parse_success}, 실패: {parse_fail})")
+            self.logger.info(f"검색 완료: {len(jobs)}개 채용공고 수집")
 
         except Exception as e:
             self.logger.error(f"검색 실패: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-
-            # 오류 시 스크린샷 저장
-            try:
-                import os
-                os.makedirs('logs', exist_ok=True)
-                await page.screenshot(path='logs/wanted_search_error.png')
-                self.logger.info("에러 스크린샷 저장됨")
-            except:
-                pass
+            await self._save_debug_files(page, 'search_error')
 
         finally:
             await page.close()
 
         return jobs
 
-    async def _parse_job_link(self, link) -> Optional[Dict]:
-        """채용공고 링크에서 정보 추출"""
+    async def _parse_job_card(self, card) -> Optional[Dict]:
+        """
+        검색 결과 카드에서 정보 추출
+
+        a 태그의 data 속성에서 대부분의 정보를 추출합니다:
+        - data-position-id: 채용공고 ID
+        - data-position-name: 포지션명
+        - data-company-id: 회사 ID
+        - data-company-name: 회사명
+        - data-job-category: 직무 카테고리
+        - data-job-category-id: 직무 카테고리 ID
+        """
         try:
-            # href에서 job_id 추출
-            href = await link.get_attribute('href')
-            if not href:
-                self.logger.debug("링크에 href 없음")
+            # data 속성에서 정보 추출
+            position_id = await card.get_attribute('data-position-id')
+            if not position_id:
                 return None
 
-            match = re.search(r'/wd/(\d+)', href)
-            if not match:
-                self.logger.debug(f"job_id 추출 실패: {href}")
-                return None
-
-            job_id = match.group(1)
-            url = f"{self.base_url}/wd/{job_id}"
-
-            # 링크 전체 텍스트에서 정보 추출 시도
-            full_text = await link.inner_text()
-            text_lines = [line.strip() for line in full_text.split('\n') if line.strip()]
-
-            # 제목 추출 시도 (여러 방법)
-            title = ''
-            title_elem = await link.query_selector('[class*="JobCard_title"], [class*="title"], strong, h2, h3')
-            if title_elem:
-                title = await title_elem.inner_text()
-            elif text_lines:
-                # 첫 번째 줄이 보통 제목
-                title = text_lines[0]
-
-            if not title:
-                # 제목이 없어도 job_id가 있으면 일단 수집 (상세 페이지에서 가져올 수 있음)
-                self.logger.debug(f"제목 없이 수집: job_id={job_id}")
-                return {
-                    'source_site': self.site_name,
-                    'job_id': job_id,
-                    'title': '',  # 상세 페이지에서 채워짐
-                    'company_name': '',
-                    'url': url
-                }
-
-            # 회사명 추출
-            company_name = ''
-            company_elem = await link.query_selector('[class*="company"], [class*="Company"]')
-            if company_elem:
-                company_name = await company_elem.inner_text()
-            elif len(text_lines) > 1:
-                # 두 번째 줄이 보통 회사명
-                company_name = text_lines[1]
-
-            # 경력/위치 정보
-            experience_level = ''
-            location_elem = await link.query_selector('[class*="location"], [class*="Location"], [class*="period"]')
-            if location_elem:
-                experience_level = await location_elem.inner_text()
-            elif len(text_lines) > 2:
-                experience_level = text_lines[2]
-
-            # 보상금
-            reward_info = ''
-            reward_elem = await link.query_selector('[class*="reward"], [class*="Reward"]')
-            if reward_elem:
-                reward_info = await reward_elem.inner_text()
-
-            return {
+            job = {
                 'source_site': self.site_name,
-                'job_id': job_id,
-                'title': clean_text(title),
-                'company_name': clean_text(company_name),
-                'experience_level': clean_text(experience_level),
-                'reward_info': clean_text(reward_info),
-                'url': url
+                'job_id': position_id,
+                'wanted_position_id': position_id,
+                'url': f"{self.base_url}/wd/{position_id}",
             }
 
+            # data 속성들
+            attrs = {
+                'data-position-name': 'title',
+                'data-company-id': 'wanted_company_id',
+                'data-company-name': 'company_name',
+                'data-job-category': 'job_category',
+                'data-job-category-id': 'wanted_job_category_id',
+            }
+
+            for data_attr, field in attrs.items():
+                value = await card.get_attribute(data_attr)
+                if value:
+                    job[field] = value
+
+            # 카드 내부에서 추가 정보 추출
+            # 제목 (data 속성에 없는 경우)
+            if not job.get('title'):
+                title_elem = await card.query_selector('strong[class*="JobCard_title"]')
+                if title_elem:
+                    job['title'] = clean_text(await title_elem.inner_text())
+
+            # 회사명 (data 속성에 없는 경우)
+            if not job.get('company_name'):
+                company_elem = await card.query_selector('span[class*="CompanyNameWithLocationPeriod"][class*="company"]')
+                if company_elem:
+                    job['company_name'] = clean_text(await company_elem.inner_text())
+
+            # 경력/위치 정보
+            location_elem = await card.query_selector('span[class*="CompanyNameWithLocationPeriod"][class*="location"]')
+            if location_elem:
+                job['experience_level'] = clean_text(await location_elem.inner_text())
+
+            # 보상금 정보
+            reward_elem = await card.query_selector('span[class*="JobCard_reward"]')
+            if reward_elem:
+                job['reward_info'] = clean_text(await reward_elem.inner_text())
+
+            return job
+
         except Exception as e:
-            self.logger.debug(f"링크 파싱 오류: {e}")
-            import traceback
-            self.logger.debug(traceback.format_exc())
+            self.logger.debug(f"카드 파싱 오류: {e}")
             return None
 
     async def get_job_detail(self, job_id: str) -> Optional[Dict]:
         """
         채용공고 상세 정보 조회
 
-        Args:
-            job_id: 채용공고 ID
-
-        Returns:
-            상세 정보 딕셔너리
+        상세 페이지의 HTML 구조:
+        - 제목: h1.wds-58fmok
+        - 회사 링크: a[class*="JobHeader__Tools__Company__Link"]
+        - 위치/경력: span[class*="JobHeader__Tools__Company__Info"]
+        - 북마크 버튼: button[data-attribute-id="position__bookmark__click"]
+        - 설명: div[class*="JobDescription__paragraph"]
+        - 태그: button[data-tag-name]
+        - 마감일: article[class*="JobDueTime"]
+        - 근무지역: article[class*="JobWorkPlace"]
+        - 산업분야: span[class*="CompanyInfo__industy"]
         """
         if not self.browser:
             await self.init_browser()
@@ -322,278 +258,144 @@ class WantedPlaywrightCrawler:
         try:
             self.logger.debug(f"상세 페이지 조회: {url}")
             await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(3)  # React 렌더링 대기
+            await asyncio.sleep(3)
 
             detail = {
                 'job_id': job_id,
                 'url': url,
-                'source_site': self.site_name
+                'source_site': self.site_name,
+                'wanted_position_id': job_id,
             }
 
-            # 제목 (여러 셀렉터 시도)
-            title_selectors = [
-                'h1',
-                '[class*="JobHeader"] h1',
-                'h1[class*="wds-"]',
-                '[data-cy="job-title"]',
-            ]
-            for selector in title_selectors:
-                title_elem = await page.query_selector(selector)
-                if title_elem:
-                    title_text = clean_text(await title_elem.inner_text())
-                    if title_text:
-                        detail['title'] = title_text
-                        break
+            # 1. 제목 추출
+            title_elem = await page.query_selector('h1.wds-58fmok, h1[class*="wds-"]')
+            if title_elem:
+                detail['title'] = clean_text(await title_elem.inner_text())
 
-            # 회사 정보 (여러 셀렉터 시도)
-            company_selectors = [
-                '[class*="JobHeader"] a[href*="/company/"]',
-                'a[href*="/company/"]',
-                '[class*="company-name"]',
-                '[data-cy="company-name"]',
-            ]
-            for selector in company_selectors:
-                company_elem = await page.query_selector(selector)
-                if company_elem:
-                    company_text = clean_text(await company_elem.inner_text())
-                    if company_text:
-                        detail['company_name'] = company_text
-                        # data 속성에서 추가 정보 추출
-                        company_id = await company_elem.get_attribute('data-company-id')
-                        if company_id:
-                            detail['wanted_company_id'] = company_id
-                        break
+            # 2. 회사 정보 (헤더의 회사 링크에서)
+            company_link = await page.query_selector('a[class*="JobHeader"][class*="Company__Link"]')
+            if company_link:
+                detail['company_name'] = clean_text(await company_link.inner_text())
+                company_id = await company_link.get_attribute('data-company-id')
+                if company_id:
+                    detail['wanted_company_id'] = company_id
 
-            # 위치 및 경력 정보
-            # 헤더 영역에서 위치/경력 정보 추출
-            header_info = await page.query_selector_all('[class*="JobHeader"] span')
-            location_keywords = ['서울', '경기', '인천', '부산', '대구', '대전', '광주', '울산', '세종', '강원', '충북', '충남', '전북', '전남', '경북', '경남', '제주', '한국', 'Korea']
-            experience_keywords = ['신입', '경력', '년', '연차']
-
-            for span in header_info:
+            # 3. 위치 및 경력 정보 (헤더의 span들)
+            info_spans = await page.query_selector_all('span[class*="JobHeader"][class*="Company__Info"]')
+            for i, span in enumerate(info_spans):
                 text = clean_text(await span.inner_text())
-                if any(kw in text for kw in location_keywords):
-                    if not detail.get('location'):
-                        detail['location'] = text
-                if any(kw in text for kw in experience_keywords):
-                    if not detail.get('experience_level'):
-                        detail['experience_level'] = text
+                if i == 0:
+                    detail['location'] = text
+                elif i == 1:
+                    detail['experience_level'] = text
 
-            # 보상금 정보
-            reward_selectors = [
-                '[class*="reward"]',
-                '[class*="Reward"]',
-            ]
-            for selector in reward_selectors:
-                try:
-                    reward_elem = await page.query_selector(selector)
-                    if reward_elem:
-                        detail['reward_info'] = clean_text(await reward_elem.inner_text())
-                        break
-                except:
-                    continue
+            # 4. 북마크 버튼에서 모든 data 속성 추출 (가장 풍부한 정보)
+            bookmark_btn = await page.query_selector('button[data-attribute-id="position__bookmark__click"]')
+            if bookmark_btn:
+                data_attrs = {
+                    'data-company-id': 'wanted_company_id',
+                    'data-company-name': 'company_name',
+                    'data-position-id': 'wanted_position_id',
+                    'data-position-name': 'title',
+                    'data-position-employment-type': 'employment_type_raw',
+                    'data-job-category': 'job_category',
+                    'data-job-category-id': 'wanted_job_category_id',
+                }
 
-            # 보상금을 텍스트에서 찾기
-            if not detail.get('reward_info'):
-                page_text = await page.inner_text('body')
-                reward_match = re.search(r'(합격\s*보상금[^\n]*)', page_text)
-                if reward_match:
-                    detail['reward_info'] = clean_text(reward_match.group(1))
+                for data_attr, field in data_attrs.items():
+                    value = await bookmark_btn.get_attribute(data_attr)
+                    if value and not detail.get(field):
+                        detail[field] = value
 
-            # 포지션 상세 설명 추출
-            # 전체 설명 영역 먼저 찾기
-            desc_selectors = [
-                '[class*="JobDescription"]',
-                '[class*="job-description"]',
-                '[class*="job-content"]',
-                'article',
-                'main section',
-            ]
+                # 고용 형태 변환
+                if detail.get('employment_type_raw'):
+                    employment_map = {
+                        'regular': '정규직',
+                        'contract': '계약직',
+                        'intern': '인턴',
+                        'freelance': '프리랜서',
+                        'part-time': '파트타임'
+                    }
+                    raw = detail.pop('employment_type_raw')
+                    detail['employment_type'] = employment_map.get(raw, raw)
 
-            full_description = ''
-            for selector in desc_selectors:
-                desc_elem = await page.query_selector(selector)
-                if desc_elem:
-                    full_description = await desc_elem.inner_text()
-                    if full_description and len(full_description) > 100:
-                        detail['description'] = clean_text(full_description)
-                        break
+            # 5. 보상금 정보
+            reward_elem = await page.query_selector('span.wds-455m6j')
+            if reward_elem:
+                detail['reward_info'] = clean_text(await reward_elem.inner_text())
 
-            # 섹션별 파싱 (주요업무, 자격요건, 우대사항)
-            if full_description:
-                # 정규식으로 섹션 분리
-                sections_pattern = [
-                    (r'(?:주요\s*업무|담당\s*업무)[:\s]*\n?([\s\S]*?)(?=(?:자격|우대|혜택|복지|기술|스킬|$))', 'main_tasks'),
-                    (r'(?:자격\s*요건|필수\s*자격)[:\s]*\n?([\s\S]*?)(?=(?:우대|혜택|복지|기술|스킬|$))', 'requirements'),
-                    (r'(?:우대\s*사항|우대\s*조건)[:\s]*\n?([\s\S]*?)(?=(?:혜택|복지|기술|스킬|채용|$))', 'preferred'),
-                ]
+            # 6. 포지션 상세 설명 (전체)
+            desc_wrapper = await page.query_selector('div[class*="JobDescription__paragraph__wrapper"]')
+            if desc_wrapper:
+                # 첫 번째 span이 회사/포지션 소개
+                intro_span = await desc_wrapper.query_selector('span.wds-h4ga6o')
+                if intro_span:
+                    detail['description'] = clean_text(await intro_span.inner_text())
 
-                for pattern, field in sections_pattern:
-                    match = re.search(pattern, full_description, re.IGNORECASE)
-                    if match:
-                        content = clean_text(match.group(1))
-                        if content and len(content) > 10:
-                            detail[field] = content
+            # 7. 주요업무, 자격요건, 우대사항 (개별 섹션)
+            paragraphs = await page.query_selector_all('div[class*="JobDescription__paragraph__"]')
+            for para in paragraphs:
+                header = await para.query_selector('h3')
+                content = await para.query_selector('span.wds-h4ga6o')
 
-            # 회사 태그들 (복지, 규모 등)
+                if header and content:
+                    header_text = clean_text(await header.inner_text())
+                    content_text = clean_text(await content.inner_text())
+
+                    if '주요업무' in header_text or '담당업무' in header_text:
+                        detail['main_tasks'] = content_text
+                    elif '자격요건' in header_text or '자격' in header_text:
+                        detail['requirements'] = content_text
+                    elif '우대' in header_text:
+                        detail['preferred'] = content_text
+
+            # 8. 회사 태그들
             tags = []
-            tag_selectors = [
-                '[class*="CompanyTag"] button',
-                '[class*="company-tag"]',
-                '[data-tag-name]',
-            ]
-            for selector in tag_selectors:
-                tag_elems = await page.query_selector_all(selector)
-                for elem in tag_elems:
-                    tag_name = await elem.get_attribute('data-tag-name')
-                    if tag_name:
-                        tags.append(tag_name)
-                    else:
-                        tag_text = clean_text(await elem.inner_text())
-                        if tag_text and len(tag_text) < 50:  # 태그는 보통 짧음
-                            tags.append(tag_text)
-                if tags:
-                    break
-            detail['company_tags'] = list(set(tags))  # 중복 제거
+            tag_buttons = await page.query_selector_all('button[data-tag-name]')
+            for btn in tag_buttons:
+                tag_name = await btn.get_attribute('data-tag-name')
+                if tag_name:
+                    tags.append(tag_name)
+            if tags:
+                detail['company_tags'] = tags
 
-            # 마감일
-            deadline_selectors = [
-                '[class*="deadline"]',
-                '[class*="DueTime"]',
-                '[class*="due-time"]',
-            ]
-            for selector in deadline_selectors:
-                try:
-                    deadline_elem = await page.query_selector(selector)
-                    if deadline_elem:
-                        detail['deadline'] = clean_text(await deadline_elem.inner_text())
-                        break
-                except:
-                    continue
+            # 9. 마감일
+            deadline_article = await page.query_selector('article[class*="JobDueTime"]')
+            if deadline_article:
+                deadline_span = await deadline_article.query_selector('span[class*="wds-"]')
+                if deadline_span:
+                    detail['deadline'] = clean_text(await deadline_span.inner_text())
 
-            # 마감일을 텍스트에서 직접 찾기
-            if not detail.get('deadline'):
-                page_text = await page.inner_text('body')
-                if '상시채용' in page_text or '상시 채용' in page_text:
-                    detail['deadline'] = '상시채용'
-                else:
-                    # 마감일 패턴 찾기
-                    deadline_match = re.search(r'마감[:\s]*(\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2})', page_text)
-                    if deadline_match:
-                        detail['deadline'] = deadline_match.group(1)
-                    else:
-                        # 날짜 형식만 찾기
-                        date_match = re.search(r'(\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2})\s*마감', page_text)
-                        if date_match:
-                            detail['deadline'] = date_match.group(1)
+            # 10. 근무지역 상세 주소
+            workplace_article = await page.query_selector('article[class*="JobWorkPlace"]')
+            if workplace_article:
+                address_span = await workplace_article.query_selector('span[class*="wds-"]')
+                if address_span:
+                    detail['work_address'] = clean_text(await address_span.inner_text())
 
-            # 근무지역 상세 주소
-            address_selectors = [
-                '[class*="WorkPlace"]',
-                '[class*="workplace"]',
-                '[class*="location"]',
-                '[class*="address"]',
-            ]
-            for selector in address_selectors:
-                try:
-                    address_elem = await page.query_selector(selector)
-                    if address_elem:
-                        addr_text = clean_text(await address_elem.inner_text())
-                        if addr_text and len(addr_text) > 5:
-                            detail['work_address'] = addr_text
-                            break
-                except:
-                    continue
+            # 11. 회사 산업 분야
+            industry_span = await page.query_selector('span[class*="CompanyInfo__industy"]')
+            if industry_span:
+                detail['company_industry'] = clean_text(await industry_span.inner_text())
 
-            # 주소를 텍스트에서 찾기
-            if not detail.get('work_address'):
-                page_text = await page.inner_text('body')
-                # 한국 주소 패턴
-                addr_match = re.search(r'((?:서울|경기|인천|부산|대구|대전|광주|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)[^\n]{10,50})', page_text)
-                if addr_match:
-                    detail['work_address'] = clean_text(addr_match.group(1))
-
-            # 회사 산업 분야
-            industry_selectors = [
-                '[class*="industry"]',
-                '[class*="Industry"]',
-            ]
-            for selector in industry_selectors:
-                industry_elem = await page.query_selector(selector)
-                if industry_elem:
-                    detail['company_industry'] = clean_text(await industry_elem.inner_text())
-                    break
-
-            # data 속성에서 상세 정보 추출 (여러 요소에서 시도)
-            data_attr_selectors = [
-                'button[data-position-id]',
-                'button[data-company-id]',
-                '[data-attribute-id*="bookmark"]',
-                '[class*="Bookmark"] button',
-            ]
-
-            for selector in data_attr_selectors:
-                btn = await page.query_selector(selector)
-                if btn:
-                    # 회사 정보
-                    company_id = await btn.get_attribute('data-company-id')
-                    if company_id and not detail.get('wanted_company_id'):
-                        detail['wanted_company_id'] = company_id
-
-                    company_name = await btn.get_attribute('data-company-name')
-                    if company_name and not detail.get('company_name'):
-                        detail['company_name'] = company_name
-
-                    # 포지션 정보
-                    position_id = await btn.get_attribute('data-position-id')
-                    if position_id:
-                        detail['wanted_position_id'] = position_id
-
-                    position_name = await btn.get_attribute('data-position-name')
-                    if position_name and not detail.get('title'):
-                        detail['title'] = position_name
-
-                    # 고용 형태 (regular, contract 등)
-                    employment_type = await btn.get_attribute('data-position-employment-type')
-                    if employment_type:
-                        employment_map = {
-                            'regular': '정규직',
-                            'contract': '계약직',
-                            'intern': '인턴',
-                            'freelance': '프리랜서',
-                            'part-time': '파트타임'
-                        }
-                        detail['employment_type'] = employment_map.get(employment_type, employment_type)
-
-                    # 직무 카테고리
-                    job_category = await btn.get_attribute('data-job-category')
-                    if job_category:
-                        detail['job_category'] = job_category
-
-                    job_category_id = await btn.get_attribute('data-job-category-id')
-                    if job_category_id:
-                        detail['wanted_job_category_id'] = job_category_id
-
-                    break  # 하나라도 찾으면 종료
-
-            # 스킬 추출 (설명에서)
-            full_text = f"{detail.get('description', '')} {detail.get('main_tasks', '')} {detail.get('requirements', '')} {detail.get('preferred', '')}"
+            # 12. 스킬 추출 (설명에서)
+            full_text = ' '.join([
+                detail.get('description', ''),
+                detail.get('main_tasks', ''),
+                detail.get('requirements', ''),
+                detail.get('preferred', '')
+            ])
             if full_text.strip():
                 skills = extract_skills_from_text(full_text)
-                detail['required_skills'] = skills.get('hard_skills', [])
-                detail['preferred_skills'] = skills.get('soft_skills', [])
+                if skills.get('hard_skills'):
+                    detail['required_skills'] = skills['hard_skills']
+                if skills.get('soft_skills'):
+                    detail['preferred_skills'] = skills['soft_skills']
 
-            # 최소한의 정보가 있는지 확인
+            # 최소 정보 확인
             if not detail.get('title') and not detail.get('company_name'):
-                self.logger.warning(f"상세 정보 추출 실패: job_id={job_id}")
-                # 디버깅용 스크린샷
-                try:
-                    import os
-                    os.makedirs('logs', exist_ok=True)
-                    await page.screenshot(path=f'logs/wanted_detail_{job_id}_debug.png')
-                    self.logger.info(f"디버그 스크린샷: logs/wanted_detail_{job_id}_debug.png")
-                except:
-                    pass
+                self.logger.warning(f"상세 정보 부족: job_id={job_id}")
+                await self._save_debug_files(page, f'detail_{job_id}')
 
             return detail
 
@@ -606,17 +408,24 @@ class WantedPlaywrightCrawler:
         finally:
             await page.close()
 
+    async def _save_debug_files(self, page, prefix: str):
+        """디버그용 스크린샷 및 HTML 저장"""
+        try:
+            import os
+            os.makedirs('logs', exist_ok=True)
+
+            await page.screenshot(path=f'logs/wanted_{prefix}_debug.png', full_page=True)
+            self.logger.info(f"디버그 스크린샷: logs/wanted_{prefix}_debug.png")
+
+            html_content = await page.content()
+            with open(f'logs/wanted_{prefix}_debug.html', 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            self.logger.info(f"디버그 HTML: logs/wanted_{prefix}_debug.html")
+        except Exception as e:
+            self.logger.warning(f"디버그 파일 저장 실패: {e}")
+
     async def crawl_keyword(self, keyword: str, max_pages: int = None) -> List[Dict]:
-        """
-        키워드로 전체 크롤링 실행
-
-        Args:
-            keyword: 검색 키워드
-            max_pages: 최대 스크롤 횟수
-
-        Returns:
-            상세 정보가 포함된 채용공고 목록
-        """
+        """키워드로 전체 크롤링 실행"""
         if max_pages is None:
             max_pages = settings.crawler.max_pages_per_keyword
 
@@ -638,13 +447,12 @@ class WantedPlaywrightCrawler:
 
                 detail = await self.get_job_detail(job['job_id'])
                 if detail:
-                    # 기본 정보와 상세 정보 병합
+                    # 기본 정보와 상세 정보 병합 (상세 정보 우선)
                     merged = {**job, **detail}
                     detailed_jobs.append(merged)
                 else:
                     detailed_jobs.append(job)
 
-                # 요청 간 딜레이
                 await asyncio.sleep(self.request_delay)
 
             self.logger.info(f"Wanted 크롤링 완료: {len(detailed_jobs)}개 수집")
@@ -652,12 +460,6 @@ class WantedPlaywrightCrawler:
 
         finally:
             await self.close_browser()
-
-    def crawl_keyword_sync(self, keyword: str, max_pages: int = None) -> List[Dict]:
-        """동기 방식 크롤링 (기존 인터페이스 호환)"""
-        return asyncio.get_event_loop().run_until_complete(
-            self.crawl_keyword(keyword, max_pages)
-        )
 
 
 # 기존 크롤러 인터페이스와 호환되는 래퍼 클래스
@@ -672,11 +474,9 @@ class WantedCrawler:
     def crawl_keyword(self, keyword: str, max_pages: int = None) -> List[Dict]:
         """키워드로 크롤링 실행"""
         try:
-            # 새 이벤트 루프 생성 (이미 실행 중인 루프가 없는 경우)
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # 이미 실행 중인 루프가 있으면 새 루프 생성
                     import nest_asyncio
                     nest_asyncio.apply()
             except RuntimeError:
@@ -730,20 +530,26 @@ if __name__ == '__main__':
     async def test():
         crawler = WantedPlaywrightCrawler()
         try:
-            await crawler.init_browser(headless=False)  # 디버깅용 헤드리스 비활성화
+            await crawler.init_browser(headless=False)
 
-            # 검색 테스트
             print("=== 검색 테스트 ===")
-            jobs = await crawler.search_jobs("백엔드", max_pages=2)
+            jobs = await crawler.search_jobs("데이터 분석가", max_pages=2)
             print(f"검색 결과: {len(jobs)}개")
 
             if jobs:
-                print(f"\n첫 번째 결과: {jobs[0]}")
+                print(f"\n첫 번째 결과:")
+                for k, v in jobs[0].items():
+                    print(f"  {k}: {v}")
 
-                # 상세 조회 테스트
                 print("\n=== 상세 조회 테스트 ===")
                 detail = await crawler.get_job_detail(jobs[0]['job_id'])
-                print(f"상세 정보: {json.dumps(detail, ensure_ascii=False, indent=2)}")
+                if detail:
+                    print(f"상세 정보:")
+                    for k, v in detail.items():
+                        if isinstance(v, str) and len(v) > 100:
+                            print(f"  {k}: {v[:100]}...")
+                        else:
+                            print(f"  {k}: {v}")
 
         finally:
             await crawler.close_browser()
