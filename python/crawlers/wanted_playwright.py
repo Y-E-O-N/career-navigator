@@ -96,10 +96,10 @@ class WantedPlaywrightCrawler:
             search_url = f"{self.search_url}?query={quote(keyword)}&tab=position"
             self.logger.info(f"검색 URL: {search_url}")
 
-            # networkidle 사용 - React 앱이 API 호출 완료할 때까지 대기
-            await page.goto(search_url, wait_until='networkidle', timeout=30000)
+            # domcontentloaded 사용 (networkidle은 analytics 때문에 타임아웃됨)
+            await page.goto(search_url, wait_until='domcontentloaded', timeout=30000)
 
-            # React 렌더링 완료 대기 (추가 시간)
+            # React 렌더링 완료 대기
             await asyncio.sleep(5)
 
             # 여러 셀렉터로 채용공고 카드 존재 확인
@@ -321,8 +321,8 @@ class WantedPlaywrightCrawler:
 
         try:
             self.logger.debug(f"상세 페이지 조회: {url}")
-            await page.goto(url, wait_until='networkidle', timeout=30000)
-            await asyncio.sleep(2)  # React 렌더링 대기
+            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(3)  # React 렌더링 대기
 
             detail = {
                 'job_id': job_id,
