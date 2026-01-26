@@ -41,8 +41,7 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          python -m playwright install chromium
-          sudo python -m playwright install-deps chromium
+          python -m playwright install chromium --with-deps
 
       - name: Run crawler and analyzer
         working-directory: python
