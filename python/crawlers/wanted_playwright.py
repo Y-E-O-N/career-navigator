@@ -25,7 +25,7 @@ except ImportError:
     PLAYWRIGHT_AVAILABLE = False
 
 from config.settings import settings
-from utils.helpers import setup_logger, clean_text, extract_skills_from_text
+from utils.helpers import setup_logger, clean_text, html_to_text, extract_skills_from_text
 from utils.database import db, JobPosting
 
 
@@ -335,7 +335,9 @@ class WantedPlaywrightCrawler:
                 # 첫 번째 span이 회사/포지션 소개
                 intro_span = await desc_wrapper.query_selector('span.wds-h4ga6o')
                 if intro_span:
-                    detail['description'] = clean_text(await intro_span.inner_text())
+                    # inner_html로 가져와서 줄바꿈 보존
+                    html_content = await intro_span.inner_html()
+                    detail['description'] = html_to_text(html_content)
 
             # 7. 주요업무, 자격요건, 우대사항 (개별 섹션)
             paragraphs = await page.query_selector_all('div[class*="JobDescription__paragraph__"]')
@@ -345,7 +347,9 @@ class WantedPlaywrightCrawler:
 
                 if header and content:
                     header_text = clean_text(await header.inner_text())
-                    content_text = clean_text(await content.inner_text())
+                    # inner_html로 가져와서 줄바꿈 보존
+                    html_content = await content.inner_html()
+                    content_text = html_to_text(html_content)
 
                     if '주요업무' in header_text or '담당업무' in header_text:
                         detail['main_tasks'] = content_text
