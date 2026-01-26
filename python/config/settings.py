@@ -118,7 +118,7 @@ class SearchKeywords:
 
     # 2. 연차 키워드
     experience_keywords: list = field(default_factory=lambda: [
-        "",  # 빈 문자열 = 연차 무관
+        # 빈 문자열 = 연차 무관
         "신입",
         "1년차"
     ])
