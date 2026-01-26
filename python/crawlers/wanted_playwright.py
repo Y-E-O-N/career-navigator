@@ -92,16 +92,18 @@ class WantedPlaywrightCrawler:
                     self.logger.info("더 이상 새로운 결과 없음")
                     break
 
-            # 모든 카드에서 정보 추출
-            job_cards = await page.query_selector_all('[class*="JobCard_content"]')
+            # 모든 채용공고 링크에서 정보 추출 (a 태그 기준)
+            job_links = await page.query_selector_all('a[href*="/wd/"]')
 
-            for card in job_cards:
+            for link in job_links:
                 try:
-                    job = await self._parse_job_card(card)
+                    job = await self._parse_job_link(link)
                     if job and job.get('job_id'):
-                        jobs.append(job)
+                        # 중복 제거
+                        if not any(j['job_id'] == job['job_id'] for j in jobs):
+                            jobs.append(job)
                 except Exception as e:
-                    self.logger.debug(f"카드 파싱 실패: {e}")
+                    self.logger.debug(f"링크 파싱 실패: {e}")
 
             self.logger.info(f"검색 완료: {len(jobs)}개 채용공고 발견")
 
@@ -113,41 +115,40 @@ class WantedPlaywrightCrawler:
 
         return jobs
 
-    async def _parse_job_card(self, card) -> Optional[Dict]:
-        """검색 결과 카드에서 기본 정보 추출"""
+    async def _parse_job_link(self, link) -> Optional[Dict]:
+        """채용공고 링크에서 정보 추출"""
         try:
+            # href에서 job_id 추출
+            href = await link.get_attribute('href')
+            if not href:
+                return None
+
+            match = re.search(r'/wd/(\d+)', href)
+            if not match:
+                return None
+
+            job_id = match.group(1)
+            url = f"{self.base_url}/wd/{job_id}"
+
+            # 링크 내부의 카드 컨텐츠에서 정보 추출
             # 제목
-            title_elem = await card.query_selector('[class*="JobCard_title"]')
+            title_elem = await link.query_selector('[class*="JobCard_title"], strong')
             title = await title_elem.inner_text() if title_elem else ''
 
             if not title:
                 return None
 
             # 회사명
-            company_elem = await card.query_selector('[class*="CompanyNameWithLocationPeriod__company"]')
+            company_elem = await link.query_selector('[class*="CompanyNameWithLocationPeriod__company"], [class*="company"]')
             company_name = await company_elem.inner_text() if company_elem else ''
 
             # 경력/위치 정보
-            location_elem = await card.query_selector('[class*="CompanyNameWithLocationPeriod__location"]')
+            location_elem = await link.query_selector('[class*="CompanyNameWithLocationPeriod__location"], [class*="location"]')
             experience_level = await location_elem.inner_text() if location_elem else ''
 
             # 보상금
-            reward_elem = await card.query_selector('[class*="JobCard_reward"]')
+            reward_elem = await link.query_selector('[class*="JobCard_reward"], [class*="reward"]')
             reward_info = await reward_elem.inner_text() if reward_elem else ''
-
-            # 링크에서 job_id 추출
-            parent = await card.query_selector('xpath=..')
-            link = await parent.query_selector('a[href*="/wd/"]') if parent else None
-
-            job_id = None
-            url = None
-            if link:
-                href = await link.get_attribute('href')
-                if href:
-                    match = re.search(r'/wd/(\d+)', href)
-                    if match:
-                        job_id = match.group(1)
-                        url = f"{self.base_url}/wd/{job_id}"
 
             return {
                 'source_site': self.site_name,
@@ -160,7 +161,7 @@ class WantedPlaywrightCrawler:
             }
 
         except Exception as e:
-            self.logger.debug(f"카드 파싱 오류: {e}")
+            self.logger.debug(f"링크 파싱 오류: {e}")
             return None
 
     async def get_job_detail(self, job_id: str) -> Optional[Dict]:
