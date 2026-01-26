@@ -1,4 +1,4 @@
-name: Deploy to Cloudflare Pages
+name: Deploy to Cloudflare Workers
 
 on:
   push:
@@ -31,17 +31,18 @@ jobs:
         working-directory: web
         run: npm ci
 
-      - name: Build for Cloudflare Pages
+      - name: Build for Cloudflare Workers (OpenNext)
         working-directory: web
-        run: npm run pages:build
+        run: npm run cf:build
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-      - name: Deploy to Cloudflare Pages
+      - name: Deploy to Cloudflare Workers
         if: github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy web/.vercel/output/static --project-name=career-navigator
+          workingDirectory: web
+          command: deploy
