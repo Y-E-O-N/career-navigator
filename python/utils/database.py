@@ -19,39 +19,48 @@ Base = declarative_base()
 class JobPosting(Base):
     """채용공고 테이블"""
     __tablename__ = 'job_postings'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     source_site = Column(String(50), nullable=False)  # wanted, saramin, jobkorea
     job_id = Column(String(100), nullable=False)  # 사이트 내 고유 ID
     title = Column(String(500), nullable=False)
     company_name = Column(String(200), nullable=False)
     company_id = Column(Integer, ForeignKey('companies.id'), nullable=True)
-    
+
     # 직무 정보
     job_category = Column(String(200))  # 직군/직무 카테고리
     position_level = Column(String(100))  # 경력 수준 (신입, 경력, 무관)
     employment_type = Column(String(100))  # 고용 형태 (정규직, 계약직 등)
-    
+
     # 상세 정보
     description = Column(Text)  # 상세 설명
     requirements = Column(Text)  # 자격요건
     preferred = Column(Text)  # 우대사항
-    
+
     # 스킬 정보 (JSON 배열)
     required_skills = Column(JSON)  # 필수 스킬
     preferred_skills = Column(JSON)  # 우대 스킬
-    
+
     # 조건
     salary_info = Column(String(200))  # 급여 정보
     location = Column(String(200))  # 근무지
-    
+
+    # Wanted 추가 필드
+    experience_level = Column(String(100))  # 경력 요구사항 (예: "경력 1년 이상")
+    reward_info = Column(String(200))  # 합격 보상금
+    main_tasks = Column(Text)  # 주요 업무
+    company_tags = Column(JSON)  # 회사 태그 (복지, 규모 등)
+    deadline = Column(String(100))  # 마감일
+    work_address = Column(String(500))  # 상세 근무지 주소
+    company_industry = Column(String(200))  # 회사 산업분야
+
     # 메타
     url = Column(String(500))
     crawled_at = Column(DateTime, default=datetime.now)
     posted_at = Column(DateTime)
     expires_at = Column(DateTime)
     is_active = Column(Boolean, default=True)
-    
+
     # 관계
     company = relationship("Company", back_populates="job_postings")
 

@@ -11,7 +11,7 @@ Job Market Analyzer - Crawlers 모듈
 
 from .base_crawler import BaseCrawler
 from .linkedin_crawler import LinkedInCrawler
-from .wanted_crawler import WantedCrawler
+from .wanted_playwright import WantedCrawler  # Playwright 기반 크롤러 사용
 from .saramin_crawler import SaraminCrawler
 from .jobkorea_crawler import JobKoreaCrawler
 from .rocketpunch_crawler import RocketPunchCrawler

@@ -126,23 +126,14 @@ class SearchKeywords:
     experience_keywords: list = field(default_factory=lambda: [
         "",  # 빈 문자열 = 연차 무관
         "신입",
-        "1년차",
-        "2년차",
-        "3년차",
-        "5년차",
-        "경력"
+        "1년차"
     ])
 
     # 3. 지역 키워드
     location_keywords: list = field(default_factory=lambda: [
         "",  # 빈 문자열 = 지역 무관
         "서울",
-        "판교",
-        "성남",
-        "강남",
-        "부산",
-        "대전",
-        "원격"
+        "판교"
     ])
 
     # 사이트별 활성화 여부
