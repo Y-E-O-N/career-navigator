@@ -72,27 +72,33 @@ class WantedPlaywrightCrawler:
             search_url = f"{self.search_url}?query={quote(keyword)}&tab=position"
             self.logger.info(f"검색 URL: {search_url}")
 
-            await page.goto(search_url, wait_until='networkidle')
-            await asyncio.sleep(2)  # 초기 로딩 대기
+            await page.goto(search_url, wait_until='domcontentloaded')
+            await asyncio.sleep(3)  # 초기 로딩 대기
+
+            # 페이지 로드 확인
+            await page.wait_for_selector('a[href*="/wd/"]', timeout=10000)
 
             # 스크롤하며 더 많은 결과 로드
+            prev_count = 0
             for scroll_count in range(max_pages):
-                # 현재 페이지의 채용공고 카드 수집
-                job_cards = await page.query_selector_all('[class*="JobCard_content"]')
+                # 현재 페이지의 채용공고 링크 수집
+                job_links = await page.query_selector_all('a[href*="/wd/"]')
+                current_count = len(job_links)
 
-                self.logger.info(f"스크롤 {scroll_count + 1}: {len(job_cards)}개 카드 발견")
+                self.logger.info(f"스크롤 {scroll_count + 1}: {current_count}개 링크 발견")
 
                 # 스크롤 다운
                 await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
                 await asyncio.sleep(self.request_delay)
 
-                # 새로운 카드가 로드되었는지 확인
-                new_cards = await page.query_selector_all('[class*="JobCard_content"]')
-                if len(new_cards) == len(job_cards):
+                # 새로운 링크가 로드되었는지 확인
+                new_links = await page.query_selector_all('a[href*="/wd/"]')
+                if len(new_links) == current_count and current_count == prev_count:
                     self.logger.info("더 이상 새로운 결과 없음")
                     break
+                prev_count = current_count
 
-            # 모든 채용공고 링크에서 정보 추출 (a 태그 기준)
+            # 모든 채용공고 링크에서 정보 추출
             job_links = await page.query_selector_all('a[href*="/wd/"]')
 
             for link in job_links:
