@@ -70,3 +70,5 @@ memo.md
 *.db
 *.sqlite
 *.sqlite3
+
+nul
