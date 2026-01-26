@@ -137,12 +137,12 @@ export default async function DashboardPage() {
               data.recentJobs.map((job) => (
                 <div
                   key={job.id}
-                  className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                  className="relative flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <Link
                       href={`/jobs/${job.id}`}
-                      className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate block"
+                      className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate block after:absolute after:inset-0 after:content-['']"
                     >
                       {job.title}
                     </Link>
@@ -150,7 +150,7 @@ export default async function DashboardPage() {
                       {job.company_name} &middot; {job.location || '위치 미정'}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
+                  <div className="relative z-10 flex items-center gap-2 ml-4">
                     <Badge variant="primary">{job.source_site}</Badge>
                   </div>
                 </div>
