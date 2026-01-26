@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { MarketAnalysis } from '@/lib/supabase/types';
 
+// Cloudflare Pages Edge Runtime
+export const runtime = 'edge';
+
 interface TrendDetailPageProps {
   params: Promise<{ keyword: string }>;
 }

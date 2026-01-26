@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { JobPosting } from '@/lib/supabase/types';
 
+// Cloudflare Pages Edge Runtime
+export const runtime = 'edge';
+
 interface JobDetailPageProps {
   params: Promise<{ id: string }>;
 }

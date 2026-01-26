@@ -5,8 +5,11 @@ import Link from 'next/link';
 import config from '@/config';
 import type { JobPosting } from '@/lib/supabase/types';
 
+// Cloudflare Pages Edge Runtime
+export const runtime = 'edge';
+
 // ISR 재검증 주기 (초) - config.cache.jobList와 동일하게 유지
-export const revalidate = 1800;
+export const revalidate = 3600;
 
 interface JobsPageProps {
   searchParams: Promise<{
