@@ -138,11 +138,11 @@ class SearchKeywords:
 
     # 사이트별 활성화 여부
     sites: dict = field(default_factory=lambda: {
-        "linkedin": True,
+        "linkedin": False,
         "wanted": True,
-        "jobkorea": True,
-        "saramin": True,
-        "rocketpunch": True
+        "jobkorea": False,
+        "saramin": False,
+        "rocketpunch": False
     })
 
     # 조합 옵션
