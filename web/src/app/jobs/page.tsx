@@ -75,14 +75,14 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
               name="keyword"
               placeholder="키워드로 검색..."
               defaultValue={params.keyword || ''}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-700 placeholder-gray-400"
             />
           </div>
           <div>
             <select
               name="site"
               defaultValue={params.site || ''}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-700"
             >
               <option value="">모든 사이트</option>
               {sites.map((site) => (
@@ -105,66 +105,67 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
       <div className="space-y-4">
         {jobs.length > 0 ? (
           jobs.map((job) => (
-            <Card key={job.id} className="card-hover">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div className="flex-1">
-                  <Link
-                    href={`/jobs/${job.id}`}
-                    className="text-lg font-semibold text-gray-900 hover:text-primary-600"
-                  >
-                    {job.title}
-                  </Link>
-                  <p className="text-gray-600 mt-1">
-                    {job.company_name}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-500">
-                    <span>{job.location || '위치 미정'}</span>
-                    {job.position_level && (
-                      <>
-                        <span>&middot;</span>
-                        <span>{job.position_level}</span>
-                      </>
-                    )}
-                    {job.salary_info && (
-                      <>
-                        <span>&middot;</span>
-                        <span>{job.salary_info}</span>
-                      </>
-                    )}
-                  </div>
-                  {job.required_skills && job.required_skills.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-3">
-                      {(job.required_skills as string[]).slice(0, config.ui.maxSkillBadges).map((skill, idx) => (
-                        <Badge key={idx} variant="primary" size="sm">
-                          {skill}
-                        </Badge>
-                      ))}
-                      {(job.required_skills as string[]).length > config.ui.maxSkillBadges && (
-                        <Badge variant="default" size="sm">
-                          +{(job.required_skills as string[]).length - config.ui.maxSkillBadges}
-                        </Badge>
+            <Link key={job.id} href={`/jobs/${job.id}`} className="block">
+              <Card className="card-hover cursor-pointer">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div className="flex-1">
+                    <h3 className="text-lg font-semibold text-gray-900 group-hover:text-primary-600">
+                      {job.title}
+                    </h3>
+                    <p className="text-gray-600 mt-1">
+                      {job.company_name}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-2 text-sm text-gray-500">
+                      <span>{job.location || '위치 미정'}</span>
+                      {job.position_level && (
+                        <>
+                          <span>&middot;</span>
+                          <span>{job.position_level}</span>
+                        </>
+                      )}
+                      {job.salary_info && (
+                        <>
+                          <span>&middot;</span>
+                          <span>{job.salary_info}</span>
+                        </>
                       )}
                     </div>
-                  )}
+                    {job.required_skills && job.required_skills.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-3">
+                        {(job.required_skills as string[]).slice(0, config.ui.maxSkillBadges).map((skill, idx) => (
+                          <Badge key={idx} variant="primary" size="sm">
+                            {skill}
+                          </Badge>
+                        ))}
+                        {(job.required_skills as string[]).length > config.ui.maxSkillBadges && (
+                          <Badge variant="default" size="sm">
+                            +{(job.required_skills as string[]).length - config.ui.maxSkillBadges}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <Badge variant="primary">{job.source_site}</Badge>
+                    <span className="text-xs text-gray-400">
+                      {new Date(job.crawled_at).toLocaleDateString('ko-KR')}
+                    </span>
+                    {job.url && (
+                      <span
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          window.open(job.url, '_blank');
+                        }}
+                        className="text-sm text-primary-600 hover:text-primary-700 cursor-pointer"
+                      >
+                        원문 보기 &rarr;
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex flex-col items-end gap-2">
-                  <Badge variant="primary">{job.source_site}</Badge>
-                  <span className="text-xs text-gray-400">
-                    {new Date(job.crawled_at).toLocaleDateString('ko-KR')}
-                  </span>
-                  {job.url && (
-                    <a
-                      href={job.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-primary-600 hover:text-primary-700"
-                    >
-                      원문 보기 &rarr;
-                    </a>
-                  )}
-                </div>
-              </div>
-            </Card>
+              </Card>
+            </Link>
           ))
         ) : (
           <Card>
