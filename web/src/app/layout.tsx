@@ -10,7 +10,7 @@ const inter = Inter({ subsets: ['latin'] });
 export const metadata: Metadata = {
   title: config.meta.title.default,
   description: config.meta.description,
-  keywords: config.meta.keywords,
+  keywords: [...config.meta.keywords],
 };
 
 export default function RootLayout({

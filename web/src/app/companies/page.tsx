@@ -3,10 +3,12 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
+import type { Company } from '@/lib/supabase/types';
 
-export const revalidate = config.cache.companies;
+// ISR 재검증 주기 (초) - config.cache.companies와 동일하게 유지
+export const revalidate = 3600;
 
-async function getCompanies() {
+async function getCompanies(): Promise<Company[]> {
   const supabase = await createServerClient();
 
   const { data: companies, error } = await supabase

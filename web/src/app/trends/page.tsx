@@ -3,10 +3,12 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
+import type { MarketAnalysis, SkillTrend } from '@/lib/supabase/types';
 
-export const revalidate = config.cache.trends;
+// ISR 재검증 주기 (초) - config.cache.trends와 동일하게 유지
+export const revalidate = 1800;
 
-async function getTrendsData() {
+async function getTrendsData(): Promise<{ analyses: MarketAnalysis[]; skillTrends: SkillTrend[] }> {
   const supabase = await createServerClient();
 
   // 최신 시장 분석 결과
@@ -16,8 +18,8 @@ async function getTrendsData() {
     .order('analysis_date', { ascending: false });
 
   // 키워드별 최신 분석만 필터링
-  const latestByKeyword = new Map();
-  (analyses || []).forEach((analysis) => {
+  const latestByKeyword = new Map<string, MarketAnalysis>();
+  ((analyses || []) as MarketAnalysis[]).forEach((analysis) => {
     if (!latestByKeyword.has(analysis.keyword)) {
       latestByKeyword.set(analysis.keyword, analysis);
     }
@@ -32,7 +34,7 @@ async function getTrendsData() {
 
   return {
     analyses: Array.from(latestByKeyword.values()),
-    skillTrends: skillTrends || [],
+    skillTrends: (skillTrends || []) as SkillTrend[],
   };
 }
 

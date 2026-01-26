@@ -4,10 +4,20 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
+import type { JobPosting, MarketAnalysis, SkillTrend } from '@/lib/supabase/types';
 
-export const revalidate = config.cache.dashboard;
+// ISR 재검증 주기 (초) - config.cache.dashboard와 동일하게 유지
+export const revalidate = 3600;
 
-async function getDashboardData() {
+interface DashboardData {
+  totalJobs: number;
+  totalCompanies: number;
+  latestAnalysis: MarketAnalysis[];
+  recentJobs: JobPosting[];
+  topSkills: SkillTrend[];
+}
+
+async function getDashboardData(): Promise<DashboardData> {
   const supabase = await createServerClient();
 
   // 총 채용공고 수

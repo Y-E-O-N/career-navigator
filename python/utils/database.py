@@ -163,7 +163,7 @@ class Database:
                 source_site=job_data.get('source_site'),
                 job_id=job_data.get('job_id')
             ).first()
-            
+
             if existing:
                 # 업데이트
                 for key, value in job_data.items():
@@ -171,12 +171,16 @@ class Database:
                         setattr(existing, key, value)
                 existing.crawled_at = datetime.now()
                 session.commit()
+                session.refresh(existing)
+                session.expunge(existing)
                 return existing
             else:
                 # 새로 추가
                 job = JobPosting(**job_data)
                 session.add(job)
                 session.commit()
+                session.refresh(job)
+                session.expunge(job)
                 return job
         except Exception as e:
             session.rollback()

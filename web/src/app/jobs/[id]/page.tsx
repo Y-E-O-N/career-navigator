@@ -3,12 +3,13 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { JobPosting } from '@/lib/supabase/types';
 
 interface JobDetailPageProps {
   params: Promise<{ id: string }>;
 }
 
-async function getJob(id: string) {
+async function getJob(id: string): Promise<JobPosting | null> {
   const supabase = await createServerClient();
 
   const { data: job, error } = await supabase

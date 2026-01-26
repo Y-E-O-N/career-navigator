@@ -3,8 +3,10 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
+import type { JobPosting } from '@/lib/supabase/types';
 
-export const revalidate = config.cache.jobList;
+// ISR 재검증 주기 (초) - config.cache.jobList와 동일하게 유지
+export const revalidate = 1800;
 
 interface JobsPageProps {
   searchParams: Promise<{
@@ -14,7 +16,7 @@ interface JobsPageProps {
   }>;
 }
 
-async function getJobs(params: { keyword?: string; site?: string; page?: string }) {
+async function getJobs(params: { keyword?: string; site?: string; page?: string }): Promise<{ jobs: JobPosting[]; count: number }> {
   const supabase = await createServerClient();
 
   const page = Number(params.page) || 1;

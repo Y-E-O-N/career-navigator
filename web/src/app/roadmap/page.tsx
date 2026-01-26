@@ -3,10 +3,12 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
+import type { MarketAnalysis } from '@/lib/supabase/types';
 
-export const revalidate = config.cache.roadmap;
+// ISR 재검증 주기 (초) - config.cache.roadmap과 동일하게 유지
+export const revalidate = 3600;
 
-async function getRoadmapData() {
+async function getRoadmapData(): Promise<MarketAnalysis[]> {
   const supabase = await createServerClient();
 
   // 로드맵이 있는 최신 분석 결과만 가져오기
@@ -17,8 +19,8 @@ async function getRoadmapData() {
     .order('analysis_date', { ascending: false });
 
   // 키워드별 최신 분석만 필터링
-  const latestByKeyword = new Map();
-  (analyses || []).forEach((analysis) => {
+  const latestByKeyword = new Map<string, MarketAnalysis>();
+  ((analyses || []) as MarketAnalysis[]).forEach((analysis) => {
     if (!latestByKeyword.has(analysis.keyword)) {
       latestByKeyword.set(analysis.keyword, analysis);
     }

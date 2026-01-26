@@ -3,12 +3,13 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import type { MarketAnalysis } from '@/lib/supabase/types';
 
 interface TrendDetailPageProps {
   params: Promise<{ keyword: string }>;
 }
 
-async function getAnalysis(keyword: string) {
+async function getAnalysis(keyword: string): Promise<MarketAnalysis | null> {
   const supabase = await createServerClient();
   const decodedKeyword = decodeURIComponent(keyword);
 
