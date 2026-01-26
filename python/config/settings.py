@@ -112,12 +112,6 @@ class SearchKeywords:
     job_keywords: list = field(default_factory=lambda: [
         "데이터 분석가",
         "데이터 엔지니어",
-        "머신러닝 엔지니어",
-        "백엔드 개발자",
-        "프론트엔드 개발자",
-        "풀스택 개발자",
-        "DevOps",
-        "클라우드 엔지니어",
         "AI 엔지니어",
         "데이터 사이언티스트"
     ])
