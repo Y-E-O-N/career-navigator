@@ -246,6 +246,56 @@ def run_company_analysis(company_name: str, db: Database, logger):
     return result
 
 
+def run_top_companies_analysis(settings: Settings, db: Database, logger, top_n: int = 10):
+    """상위 채용 기업 자동 분석"""
+    logger.info("=" * 60)
+    logger.info("상위 채용 기업 분석 시작")
+    logger.info("=" * 60)
+
+    analyzer = CompanyAnalyzer(db)
+
+    # 각 키워드별 상위 채용 기업 분석
+    keywords = settings.search_keywords.main_keywords[:3]  # 상위 3개 키워드만
+    analyzed_companies = set()
+
+    for keyword in keywords:
+        logger.info(f"\n[{keyword}] 상위 채용 기업 조회...")
+        top_companies = analyzer.get_top_hiring_companies(keyword=keyword, days=30, limit=5)
+
+        for company_info in top_companies:
+            company_name = company_info['company_name']
+
+            # 이미 분석한 회사는 스킵
+            if company_name in analyzed_companies:
+                logger.info(f"  → {company_name}: 이미 분석됨, 스킵")
+                continue
+
+            analyzed_companies.add(company_name)
+
+            try:
+                logger.info(f"  → {company_name} 분석 중... (채용공고 {company_info['job_count']}건)")
+                result = analyzer.analyze_company(company_name)
+
+                if result and result.get('reputation', {}).get('jobplanet_rating'):
+                    rating = result['reputation']['jobplanet_rating']
+                    logger.info(f"    잡플래닛 평점: {rating}/5.0")
+                else:
+                    logger.info(f"    잡플래닛 정보 없음")
+
+            except Exception as e:
+                logger.warning(f"    분석 실패: {e}")
+
+            # 상위 N개 회사만 분석
+            if len(analyzed_companies) >= top_n:
+                break
+
+        if len(analyzed_companies) >= top_n:
+            break
+
+    logger.info(f"\n회사 분석 완료: {len(analyzed_companies)}개 기업")
+    return list(analyzed_companies)
+
+
 def generate_reports(settings: Settings, db: Database, logger):
     """리포트 생성"""
     logger.info("=" * 60)
@@ -332,7 +382,10 @@ def run_all(settings: Settings, db: Database, logger, force_analyze: bool = Fals
             logger.info("강제 분석 모드: DB에 있는 기존 데이터로 분석을 실행합니다.")
         results = run_analysis(settings, db, logger)
 
-        # 3. 리포트 생성
+        # 3. 회사 분석 (상위 채용 기업)
+        run_top_companies_analysis(settings, db, logger)
+
+        # 4. 리포트 생성
         if results:
             generate_reports(settings, db, logger)
     else:
