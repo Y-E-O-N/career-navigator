@@ -230,26 +230,39 @@ def generate_reports(settings: Settings, db: Database, logger):
     logger.info("=" * 60)
     logger.info("리포트 생성 시작")
     logger.info("=" * 60)
-    
+
     try:
         from report_generator import ReportGenerator
-        
+
         generator = ReportGenerator(db)
         keywords = settings.search_keywords.keywords
-        
+
         for keyword in keywords:
             logger.info(f"\n키워드 리포트 생성: {keyword}")
-            
+
             # 최신 분석 결과 조회
-            analysis = db.get_latest_analysis(keyword)
-            if not analysis:
+            analysis_obj = db.get_latest_analysis(keyword)
+            if not analysis_obj:
                 logger.warning(f"  → 분석 결과 없음")
                 continue
-            
+
+            # MarketAnalysis 객체를 딕셔너리로 변환
+            analysis = {
+                'keyword': analysis_obj.keyword,
+                'total_postings': analysis_obj.total_postings,
+                'top_companies': analysis_obj.top_companies or [],
+                'top_skills': analysis_obj.top_skills or [],
+                'market_summary': analysis_obj.market_summary or '',
+                'trend_analysis': analysis_obj.trend_analysis or '',
+                'roadmap_3months': analysis_obj.roadmap_3months or '',
+                'roadmap_6months': analysis_obj.roadmap_6months or '',
+                'analysis_date': analysis_obj.analysis_date.isoformat() if analysis_obj.analysis_date else '',
+            }
+
             # 마크다운 리포트
             md_path = generator.generate_markdown_report(keyword, analysis)
             logger.info(f"  → 마크다운: {md_path}")
-            
+
             # HTML 리포트
             html_path = generator.generate_html_report(keyword, analysis)
             logger.info(f"  → HTML: {html_path}")
@@ -280,31 +293,33 @@ def run_scheduler(settings: Settings, db: Database, logger):
         logger.error(f"스케줄러 시작 실패: {e}")
 
 
-def run_all(settings: Settings, db: Database, logger):
+def run_all(settings: Settings, db: Database, logger, force_analyze: bool = False):
     """전체 파이프라인 실행"""
     logger.info("=" * 60)
     logger.info("전체 파이프라인 시작")
     logger.info(f"시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
-    
+
     start_time = datetime.now()
-    
+
     # 1. 크롤링
     total_jobs = run_crawling(settings, db, logger)
-    
+
     # 2. 분석
-    if total_jobs > 0:
+    if total_jobs > 0 or force_analyze:
+        if force_analyze and total_jobs == 0:
+            logger.info("강제 분석 모드: DB에 있는 기존 데이터로 분석을 실행합니다.")
         results = run_analysis(settings, db, logger)
-        
+
         # 3. 리포트 생성
         if results:
             generate_reports(settings, db, logger)
     else:
-        logger.warning("수집된 데이터가 없어 분석을 건너뜁니다.")
-    
+        logger.warning("수집된 데이터가 없어 분석을 건너뜁니다. (--force-analyze 옵션으로 강제 실행 가능)")
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
-    
+
     logger.info("=" * 60)
     logger.info("전체 파이프라인 완료")
     logger.info(f"소요 시간: {duration:.1f}초")
@@ -385,6 +400,12 @@ def main():
         action='store_true',
         help='디버그 모드'
     )
+
+    parser.add_argument(
+        '--force-analyze',
+        action='store_true',
+        help='크롤링 결과와 관계없이 분석 강제 실행 (DB에 있는 기존 데이터 사용)'
+    )
     
     args = parser.parse_args()
     
@@ -442,7 +463,7 @@ def main():
             generate_reports(settings, db, logger)
             
         elif args.command == 'all':
-            run_all(settings, db, logger)
+            run_all(settings, db, logger, force_analyze=args.force_analyze)
             
         elif args.command == 'schedule':
             run_scheduler(settings, db, logger)
