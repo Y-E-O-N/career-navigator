@@ -7,6 +7,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
 import sys
+import time
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -76,60 +78,83 @@ class LLMAnalyzer:
         else:
             self.logger.warning(f"LLM provider {self.provider} not available")
     
-    def _call_llm(self, prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> Optional[str]:
-        """LLM API 호출"""
+    def _call_llm(self, prompt: str, system_prompt: str = "", max_tokens: int = 4096, max_retries: int = 3) -> Optional[str]:
+        """LLM API 호출 (429 에러 시 자동 재시도)"""
         if not self.client:
             self.logger.warning("LLM client not initialized")
             return None
 
-        try:
-            if self.provider == "gemini":
-                # Gemini - 새 google.genai API 사용
-                full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-                self.logger.debug(f"Calling Gemini model: {self.gemini_model}")
-                response = self.client.models.generate_content(
-                    model=self.gemini_model,
-                    contents=full_prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=max_tokens,
-                        temperature=0.7,
+        for attempt in range(max_retries):
+            try:
+                if self.provider == "gemini":
+                    # Gemini - 새 google.genai API 사용
+                    full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                    self.logger.debug(f"Calling Gemini model: {self.gemini_model} (attempt {attempt + 1})")
+                    response = self.client.models.generate_content(
+                        model=self.gemini_model,
+                        contents=full_prompt,
+                        config=types.GenerateContentConfig(
+                            max_output_tokens=max_tokens,
+                            temperature=0.7,
+                        )
                     )
-                )
-                # 응답 검증
-                if response and hasattr(response, 'text') and response.text:
-                    self.logger.info(f"Gemini response received: {len(response.text)} chars")
-                    return response.text
-                else:
-                    self.logger.warning(f"Gemini response empty or invalid: {response}")
-                    return None
+                    # 응답 검증
+                    if response and hasattr(response, 'text') and response.text:
+                        self.logger.info(f"Gemini response received: {len(response.text)} chars")
+                        return response.text
+                    else:
+                        self.logger.warning(f"Gemini response empty or invalid: {response}")
+                        return None
 
-            elif self.provider == "anthropic":
-                message = self.client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=max_tokens,
-                    system=system_prompt,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                return message.content[0].text
+                elif self.provider == "anthropic":
+                    message = self.client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=max_tokens,
+                        system=system_prompt,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    return message.content[0].text
 
-            elif self.provider == "openai":
-                response = self.client.ChatCompletion.create(
-                    model="gpt-4",
-                    max_tokens=max_tokens,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt}
-                    ]
-                )
-                return response.choices[0].message.content
+                elif self.provider == "openai":
+                    response = self.client.ChatCompletion.create(
+                        model="gpt-4",
+                        max_tokens=max_tokens,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt}
+                        ]
+                    )
+                    return response.choices[0].message.content
 
-        except Exception as e:
-            self.logger.error(f"LLM API call failed: {e}")
-            import traceback
-            self.logger.error(traceback.format_exc())
-            return None
+            except Exception as e:
+                error_str = str(e)
+
+                # 429 Rate Limit 에러 처리
+                if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
+                    # 에러 메시지에서 대기 시간 추출 시도
+                    wait_match = re.search(r'retry in (\d+\.?\d*)', error_str.lower())
+                    if wait_match:
+                        wait_time = float(wait_match.group(1)) + 1  # 여유분 추가
+                    else:
+                        wait_time = (attempt + 1) * 40  # 기본 대기: 40초, 80초, 120초
+
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"Rate limit hit, waiting {wait_time:.0f}s before retry ({attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        self.logger.error(f"Rate limit exceeded after {max_retries} attempts")
+                        return None
+
+                # 다른 에러는 재시도 없이 종료
+                self.logger.error(f"LLM API call failed: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+                return None
+
+        return None
     
     def analyze_market_trends(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
         """
