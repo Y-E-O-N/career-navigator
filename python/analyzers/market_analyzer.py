@@ -19,29 +19,31 @@ from utils.helpers import setup_logger, extract_skills_from_text
 class MarketAnalyzer:
     """채용 시장 분석기"""
 
-    def __init__(self, database=None):
+    def __init__(self, database=None, llm_analyzer=None):
         self.logger = setup_logger("analyzer.market")
         self.db = database if database else db
-    
-    def analyze_keyword(self, keyword: str, days: int = 30) -> Dict[str, Any]:
+        self.llm_analyzer = llm_analyzer
+
+    def analyze_keyword(self, keyword: str, days: int = 30, use_llm: bool = False) -> Dict[str, Any]:
         """
         특정 키워드에 대한 시장 분석
-        
+
         Args:
             keyword: 분석 키워드
             days: 분석 기간 (일)
-            
+            use_llm: LLM 기반 분석 사용 여부
+
         Returns:
             분석 결과 딕셔너리
         """
-        self.logger.info(f"Analyzing market for keyword: {keyword}")
+        self.logger.info(f"Analyzing market for keyword: {keyword} (LLM: {use_llm})")
 
         # 데이터 조회
         jobs = self.db.get_job_postings(keyword=keyword, days=days)
-        
+
         if not jobs:
             return {'error': 'No job postings found', 'keyword': keyword}
-        
+
         analysis = {
             'keyword': keyword,
             'analysis_date': datetime.now().isoformat(),
@@ -52,26 +54,65 @@ class MarketAnalyzer:
 
         # 기본 통계
         analysis['statistics'] = self._calculate_statistics(jobs)
-        
+
         # 회사별 분석
         analysis['top_companies'] = self._analyze_companies(jobs)
-        
-        # 스킬 분석
-        analysis['skill_analysis'] = self._analyze_skills(jobs)
-        
-        # 지역별 분석
-        analysis['location_analysis'] = self._analyze_locations(jobs)
-        
-        # 경력 요구사항 분석
-        analysis['experience_analysis'] = self._analyze_experience(jobs)
-        
+
+        # LLM 기반 분석 또는 규칙 기반 분석
+        if use_llm and self.llm_analyzer and self.llm_analyzer.is_available():
+            self.logger.info("  → LLM 기반 스킬/지역/경력 분석 중...")
+            llm_extraction = self._analyze_with_llm(jobs)
+            if llm_extraction:
+                analysis['skill_analysis'] = {
+                    'hard_skills': llm_extraction.get('skills', []),
+                    'soft_skills': []  # LLM에서 별도 추출 가능
+                }
+                analysis['location_analysis'] = llm_extraction.get('locations', [])
+                analysis['experience_analysis'] = {
+                    'distribution': llm_extraction.get('experience_levels', [])
+                }
+            else:
+                # LLM 실패 시 규칙 기반으로 폴백
+                self.logger.warning("  → LLM 분석 실패, 규칙 기반으로 폴백")
+                analysis['skill_analysis'] = self._analyze_skills(jobs)
+                analysis['location_analysis'] = self._analyze_locations(jobs)
+                analysis['experience_analysis'] = self._analyze_experience(jobs)
+        else:
+            # 규칙 기반 분석
+            analysis['skill_analysis'] = self._analyze_skills(jobs)
+            analysis['location_analysis'] = self._analyze_locations(jobs)
+            analysis['experience_analysis'] = self._analyze_experience(jobs)
+
         # 고용 형태 분석
         analysis['employment_type_analysis'] = self._analyze_employment_types(jobs)
-        
+
         # 사이트별 분포
         analysis['site_distribution'] = self._analyze_sites(jobs)
-        
+
         return analysis
+
+    def _analyze_with_llm(self, jobs: List[JobPosting]) -> Optional[Dict[str, Any]]:
+        """LLM 기반 분석"""
+        if not self.llm_analyzer:
+            return None
+
+        # JobPosting 객체를 딕셔너리로 변환
+        jobs_data = [
+            {
+                'title': job.title,
+                'description': job.description,
+                'requirements': job.requirements,
+                'location': job.location,
+                'position_level': job.position_level
+            }
+            for job in jobs[:100]  # 최대 100개만 분석 (비용 제한)
+        ]
+
+        try:
+            return self.llm_analyzer.extract_job_details_batch(jobs_data, batch_size=10)
+        except Exception as e:
+            self.logger.error(f"LLM 분석 실패: {e}")
+            return None
     
     def _calculate_statistics(self, jobs: List[JobPosting]) -> Dict[str, Any]:
         """기본 통계 계산"""

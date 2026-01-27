@@ -94,27 +94,29 @@ def run_analysis(settings: Settings, db: Database, logger):
     logger.info("=" * 60)
     logger.info("시장 분석 시작")
     logger.info("=" * 60)
-    
+
     keywords = settings.search_keywords.keywords
-    market_analyzer = MarketAnalyzer(db)
-    
+
     # LLM 분석기 초기화
     llm_analyzer = LLMAnalyzer()
     use_llm = llm_analyzer.is_available()
-    
+
+    # MarketAnalyzer에 LLM 분석기 전달
+    market_analyzer = MarketAnalyzer(db, llm_analyzer=llm_analyzer if use_llm else None)
+
     if use_llm:
-        logger.info("LLM 분석 활성화됨")
+        logger.info("LLM 분석 활성화됨 (스킬/지역/경력 분석에 LLM 사용)")
     else:
-        logger.info("LLM 분석 비활성화 - Fallback 모드 사용")
-    
+        logger.info("LLM 분석 비활성화 - 규칙 기반 분석 사용")
+
     results = {}
-    
+
     for keyword in keywords:
         logger.info(f"\n키워드 분석: {keyword}")
-        
+
         try:
-            # 기본 시장 분석
-            analysis = market_analyzer.analyze_keyword(keyword, days=30)
+            # 기본 시장 분석 (LLM 사용 여부 전달)
+            analysis = market_analyzer.analyze_keyword(keyword, days=30, use_llm=use_llm)
 
             # 데이터 없음 체크 (에러 반환 또는 total_postings가 0인 경우)
             if analysis.get('error') or analysis.get('total_postings', 0) == 0:

@@ -366,6 +366,178 @@ class LLMAnalyzer:
             'learning_guide': response or "가이드 생성에 실패했습니다.",
         }
     
+    def extract_job_details_batch(self, jobs_data: List[Dict[str, Any]], batch_size: int = 10) -> Dict[str, Any]:
+        """
+        여러 채용공고에서 스킬, 지역, 경력 정보를 배치로 추출
+
+        Args:
+            jobs_data: 채용공고 데이터 리스트 [{title, description, requirements, location, position_level}, ...]
+            batch_size: 한 번에 처리할 공고 수
+
+        Returns:
+            추출된 정보 집계 결과
+        """
+        all_skills = []
+        all_locations = []
+        all_experience_levels = []
+
+        # 배치 처리
+        for i in range(0, len(jobs_data), batch_size):
+            batch = jobs_data[i:i + batch_size]
+            batch_result = self._extract_batch(batch)
+
+            if batch_result:
+                all_skills.extend(batch_result.get('skills', []))
+                all_locations.extend(batch_result.get('locations', []))
+                all_experience_levels.extend(batch_result.get('experience_levels', []))
+
+        # 집계
+        from collections import Counter
+        skill_counts = Counter(all_skills)
+        location_counts = Counter(all_locations)
+        experience_counts = Counter(all_experience_levels)
+
+        total_jobs = len(jobs_data)
+
+        return {
+            'total_analyzed': total_jobs,
+            'skills': [
+                {'skill': skill, 'count': count, 'percentage': round(count / total_jobs * 100, 1)}
+                for skill, count in skill_counts.most_common(30)
+            ],
+            'locations': [
+                {'location': loc, 'count': count, 'percentage': round(count / total_jobs * 100, 1)}
+                for loc, count in location_counts.most_common(15)
+            ],
+            'experience_levels': [
+                {'level': level, 'count': count, 'percentage': round(count / total_jobs * 100, 1)}
+                for level, count in experience_counts.most_common()
+            ]
+        }
+
+    def _extract_batch(self, batch: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """배치에서 정보 추출"""
+        system_prompt = """당신은 채용공고 분석 전문가입니다.
+주어진 채용공고들에서 기술 스택, 근무 지역, 경력 요구사항을 정확하게 추출해주세요.
+반드시 JSON 형식으로만 응답하세요."""
+
+        # 배치 데이터 구성
+        jobs_text = ""
+        for idx, job in enumerate(batch, 1):
+            jobs_text += f"""
+---공고 {idx}---
+제목: {job.get('title', '')}
+지역: {job.get('location', '')}
+경력: {job.get('position_level', '')}
+내용: {(job.get('description', '') or '')[:500]}
+요구사항: {(job.get('requirements', '') or '')[:300]}
+"""
+
+        prompt = f"""다음 {len(batch)}개의 채용공고에서 정보를 추출해주세요:
+
+{jobs_text}
+
+각 공고별로 다음을 추출하세요:
+1. 기술 스택 (프로그래밍 언어, 프레임워크, 도구, 클라우드 등)
+2. 근무 지역 (서울, 경기, 판교, 부산, 원격/재택 등)
+3. 경력 수준 (신입, 1-3년차, 4-7년차, 8년+, 경력무관)
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{{
+  "extractions": [
+    {{
+      "job_index": 1,
+      "skills": ["Python", "Django", "AWS"],
+      "location": "서울 강남",
+      "experience": "3-5년차"
+    }}
+  ]
+}}"""
+
+        response = self._call_llm(prompt, system_prompt, max_tokens=2000)
+
+        if not response:
+            return None
+
+        # JSON 파싱
+        try:
+            # JSON 부분만 추출
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                result = json.loads(json_match.group())
+                extractions = result.get('extractions', [])
+
+                skills = []
+                locations = []
+                experience_levels = []
+
+                for ext in extractions:
+                    skills.extend(ext.get('skills', []))
+                    loc = ext.get('location', '')
+                    if loc:
+                        # 지역 정규화
+                        loc_normalized = self._normalize_location(loc)
+                        locations.append(loc_normalized)
+                    exp = ext.get('experience', '')
+                    if exp:
+                        exp_normalized = self._normalize_experience(exp)
+                        experience_levels.append(exp_normalized)
+
+                return {
+                    'skills': skills,
+                    'locations': locations,
+                    'experience_levels': experience_levels
+                }
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON 파싱 실패: {e}")
+
+        return None
+
+    def _normalize_location(self, location: str) -> str:
+        """지역명 정규화"""
+        loc_lower = location.lower()
+
+        if any(x in loc_lower for x in ['원격', '재택', '리모트', 'remote']):
+            return '원격/재택'
+        elif '판교' in loc_lower:
+            return '판교'
+        elif '강남' in loc_lower:
+            return '서울 강남'
+        elif '서울' in loc_lower:
+            return '서울'
+        elif '경기' in loc_lower or '성남' in loc_lower:
+            return '경기'
+        elif '인천' in loc_lower:
+            return '인천'
+        elif '부산' in loc_lower:
+            return '부산'
+        elif '대구' in loc_lower:
+            return '대구'
+        elif '대전' in loc_lower:
+            return '대전'
+        elif '광주' in loc_lower:
+            return '광주'
+        else:
+            return location.strip()[:20]  # 기타 지역은 원본 유지
+
+    def _normalize_experience(self, experience: str) -> str:
+        """경력 수준 정규화"""
+        exp_lower = experience.lower()
+
+        if any(x in exp_lower for x in ['신입', 'entry', 'junior', '0년']):
+            return '신입'
+        elif any(x in exp_lower for x in ['무관', '경력무관', '관계없']):
+            return '경력무관'
+        elif any(x in exp_lower for x in ['1년', '2년', '3년', '1-3', '1~3']):
+            return '주니어 (1-3년)'
+        elif any(x in exp_lower for x in ['4년', '5년', '6년', '7년', '4-7', '4~7', '3-5', '5-7']):
+            return '미들 (4-7년)'
+        elif any(x in exp_lower for x in ['8년', '9년', '10년', 'senior', '시니어', '7년 이상', '10년 이상']):
+            return '시니어 (8년+)'
+        else:
+            return '기타'
+
     def is_available(self) -> bool:
         """LLM 사용 가능 여부 확인"""
         return self.client is not None
