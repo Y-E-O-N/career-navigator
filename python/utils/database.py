@@ -81,35 +81,40 @@ class JobPosting(Base):
 class Company(Base):
     """회사 정보 테이블"""
     __tablename__ = 'companies'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(200), nullable=False, unique=True)
-    
+
     # 기본 정보
     business_number = Column(String(50))  # 사업자등록번호
     industry = Column(String(200))  # 산업 분야
     company_size = Column(String(100))  # 기업 규모
     founded_year = Column(Integer)
-    
+    location = Column(String(100))  # 지역 (서울, 경기 등)
+
     # 상세 정보
     description = Column(Text)
     website = Column(String(300))
     address = Column(String(500))
-    
+
     # 평판 정보
     glassdoor_rating = Column(Float)
     jobplanet_rating = Column(Float)
+    jobplanet_url = Column(String(500))  # 잡플래닛 URL
     blind_summary = Column(Text)  # 블라인드 요약
     news_summary = Column(Text)  # 뉴스 요약
     public_sentiment = Column(Text)  # 대중 평가 요약
-    
+
     # 재무 정보 (사업자 조회 결과)
     revenue = Column(String(100))
     employee_count = Column(Integer)
-    
+
+    # 잡플래닛 추가 정보 (JSON)
+    additional_info = Column(Text)  # 연봉, 면접, 복지 등 JSON
+
     # 메타
     last_updated = Column(DateTime, default=get_kst_now)
-    
+
     # 관계
     job_postings = relationship("JobPosting", back_populates="company")
 
