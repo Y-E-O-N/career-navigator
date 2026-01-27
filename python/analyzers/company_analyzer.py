@@ -66,7 +66,8 @@ class CompanyAnalyzer:
             'founded_date': jobplanet_info.get('founded_date'),
             'ceo': jobplanet_info.get('ceo'),
             'revenue': jobplanet_info.get('revenue'),
-            'address': jobplanet_info.get('address') or db_basic.get('location'),
+            'location': jobplanet_info.get('location') or db_basic.get('location'),
+            'address': jobplanet_info.get('address'),
             'website': jobplanet_info.get('website'),
         }
 
@@ -146,6 +147,15 @@ class CompanyAnalyzer:
         finally:
             session.close()
 
+    def _normalize_company_name(self, name: str) -> str:
+        """회사명 정규화 (띄어쓰기, 특수문자 제거)"""
+        if not name:
+            return ""
+        # (주), (유), 주식회사 등 제거
+        normalized = re.sub(r'\(주\)|\(유\)|주식회사|㈜|\s+', '', name)
+        # 소문자로 변환
+        return normalized.lower().strip()
+
     def _get_jobplanet_info(self, company_name: str) -> Dict[str, Any]:
         """잡플래닛에서 회사 정보 조회 (Playwright 사용)"""
         info = {
@@ -156,6 +166,7 @@ class CompanyAnalyzer:
             'company_type': None,
             'employee_count': None,
             'founded_date': None,
+            'location': None,
             'ceo': None,
             'revenue': None,
             'address': None,
@@ -170,6 +181,7 @@ class CompanyAnalyzer:
         try:
             self.rate_limiter.wait()
             search_url = f"https://www.jobplanet.co.kr/search?query={company_name}"
+            normalized_search = self._normalize_company_name(company_name)
 
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
@@ -181,28 +193,85 @@ class CompanyAnalyzer:
                     page.goto(search_url)
                     page.wait_for_load_state('networkidle', timeout=10000)
 
-                    # 2. 검색 결과에서 회사 링크 찾기
-                    company_link = None
+                    # 2. 검색 결과 카드에서 회사 찾기
+                    # 카드 구조: <a href="/companies/..."><h4>회사명</h4>...</a>
+                    company_cards = page.query_selector_all('a[href*="/companies/"]')
+                    matched_card = None
 
-                    # 회사 검색 결과 링크 찾기
-                    links = page.query_selector_all('a[href*="/companies/"]')
-                    for link in links[:10]:
+                    for card in company_cards[:15]:
                         try:
-                            link_text = link.text_content().strip()
-                            if company_name.lower() in link_text.lower():
-                                href = link.get_attribute('href')
-                                if href and '/companies/' in href:
-                                    company_link = href
-                                    break
-                        except:
+                            # h4 태그에서 회사명 찾기
+                            name_elem = card.query_selector('h4')
+                            if not name_elem:
+                                continue
+
+                            card_name = name_elem.text_content().strip()
+                            normalized_card = self._normalize_company_name(card_name)
+
+                            # 정규화된 이름이 일치하면 선택
+                            if normalized_search == normalized_card:
+                                matched_card = card
+                                self.logger.info(f"  → 정확히 일치: {card_name}")
+                                break
+                            # 부분 일치도 허용 (검색어가 카드 이름에 포함되거나 반대)
+                            elif normalized_search in normalized_card or normalized_card in normalized_search:
+                                matched_card = card
+                                self.logger.info(f"  → 부분 일치: {card_name}")
+                                break
+                        except Exception as e:
+                            self.logger.debug(f"Error checking card: {e}")
                             continue
 
-                    if not company_link:
+                    if not matched_card:
                         self.logger.warning(f"Company not found on Jobplanet: {company_name}")
                         browser.close()
                         return info
 
-                    # 3. 회사 상세 페이지로 이동
+                    # 3. 검색 결과 카드에서 정보 추출
+                    try:
+                        # 평점 추출: <span class="ml-[2px] text-gray-800 ...">3.9</span>
+                        rating_elem = matched_card.query_selector('span.text-gray-800')
+                        if rating_elem:
+                            rating_text = rating_elem.text_content().strip()
+                            rating_match = re.search(r'^(\d+\.?\d*)$', rating_text)
+                            if rating_match:
+                                info['jobplanet_rating'] = float(rating_match.group(1))
+
+                        # 산업/지역: <div class="ml-[16px] text-gray-400 ...">제조/화학∙서울</div>
+                        industry_loc_elem = matched_card.query_selector('div.text-gray-400')
+                        if industry_loc_elem:
+                            industry_loc_text = industry_loc_elem.text_content().strip()
+                            # "제조/화학∙서울" 형태 파싱
+                            if '∙' in industry_loc_text:
+                                parts = industry_loc_text.split('∙')
+                                info['industry'] = parts[0].strip()
+                                if len(parts) > 1:
+                                    info['location'] = parts[1].strip()
+                            else:
+                                info['industry'] = industry_loc_text
+
+                        # 설립연도, 사원수: <span>57년차 (1969)</span>, <span>71666명</span>
+                        info_spans = matched_card.query_selector_all('span')
+                        for span in info_spans:
+                            span_text = span.text_content().strip()
+                            # 설립연도: "57년차 (1969)" 패턴
+                            founded_match = re.search(r'\((\d{4})\)', span_text)
+                            if founded_match:
+                                info['founded_date'] = founded_match.group(1)
+                            # 사원수: "71666명" 패턴
+                            employee_match = re.match(r'^([\d,]+)명$', span_text)
+                            if employee_match:
+                                info['employee_count'] = span_text
+
+                    except Exception as e:
+                        self.logger.debug(f"Error extracting card info: {e}")
+
+                    # 4. 회사 상세 페이지로 이동
+                    company_link = matched_card.get_attribute('href')
+                    if not company_link:
+                        browser.close()
+                        return info
+
                     if not company_link.startswith('http'):
                         company_link = f"https://www.jobplanet.co.kr{company_link}"
 
@@ -210,16 +279,7 @@ class CompanyAnalyzer:
                     page.goto(company_link)
                     page.wait_for_load_state('networkidle', timeout=10000)
 
-                    # 4. 평점 추출
-                    rating_elem = page.query_selector('[class*="rating"], [class*="score"], .rate_point')
-                    if rating_elem:
-                        rating_text = rating_elem.text_content()
-                        rating_match = re.search(r'(\d+\.?\d*)', rating_text)
-                        if rating_match:
-                            info['jobplanet_rating'] = float(rating_match.group(1))
-
-                    # 5. 기본 정보 추출 (상단 카드)
-                    # 산업, 기업형태, 사원수, 설립
+                    # 5. 상세 페이지에서 추가 정보 추출
                     info_items = page.query_selector_all('ul li')
                     for item in info_items:
                         try:
@@ -230,14 +290,8 @@ class CompanyAnalyzer:
                                 label = label_elem.text_content().strip()
                                 value = value_elem.text_content().strip()
 
-                                if '산업' in label:
-                                    info['industry'] = value
-                                elif '기업형태' in label or '기업 형태' in label:
+                                if '기업형태' in label or '기업 형태' in label:
                                     info['company_type'] = value
-                                elif '사원수' in label or '사원 수' in label:
-                                    info['employee_count'] = value
-                                elif '설립' in label:
-                                    info['founded_date'] = value
                                 elif '대표' in label:
                                     info['ceo'] = value
                                 elif '매출' in label:
@@ -245,14 +299,13 @@ class CompanyAnalyzer:
                                 elif '주소' in label:
                                     info['address'] = value
                                 elif '웹사이트' in label or '홈페이지' in label:
-                                    # 웹사이트는 a 태그에서 가져오기
                                     website_link = item.query_selector('a[href]')
                                     if website_link:
                                         info['website'] = website_link.get_attribute('href')
                                     else:
                                         info['website'] = value
                         except Exception as e:
-                            self.logger.debug(f"Error parsing info item: {e}")
+                            self.logger.debug(f"Error parsing detail item: {e}")
 
                     # 6. 평점 기반 sentiment 설정
                     if info['jobplanet_rating']:
@@ -288,6 +341,8 @@ class CompanyAnalyzer:
         info_parts = []
         if basic_info.get('industry'):
             info_parts.append(f"산업: {basic_info['industry']}")
+        if basic_info.get('location'):
+            info_parts.append(f"지역: {basic_info['location']}")
         if basic_info.get('company_type'):
             info_parts.append(f"형태: {basic_info['company_type']}")
         if basic_info.get('employee_count'):
@@ -355,6 +410,7 @@ class CompanyAnalyzer:
                 'name': analysis['company_name'],
                 'industry': basic_info.get('industry'),
                 'company_size': basic_info.get('company_type'),
+                'location': basic_info.get('location'),
                 'address': basic_info.get('address'),
                 'website': basic_info.get('website'),
                 'founded_year': self._extract_year(basic_info.get('founded_date')),
