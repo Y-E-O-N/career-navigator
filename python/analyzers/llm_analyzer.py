@@ -31,7 +31,7 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 try:
-    import openai
+    from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
@@ -70,9 +70,9 @@ class LLMAnalyzer:
         elif self.provider == "openai" and OPENAI_AVAILABLE:
             api_key = settings.analyzer.openai_api_key
             if api_key:
-                openai.api_key = api_key
-                self.client = openai
-                self.logger.info("Initialized OpenAI client")
+                self.client = OpenAI(api_key=api_key)
+                self.openai_model = 'gpt-5-nano'
+                self.logger.info(f"Initialized OpenAI client (model: {self.openai_model})")
             else:
                 self.logger.warning("OpenAI API key not set")
         else:
@@ -118,15 +118,21 @@ class LLMAnalyzer:
                     return message.content[0].text
 
                 elif self.provider == "openai":
-                    response = self.client.ChatCompletion.create(
-                        model="gpt-4",
+                    messages = []
+                    if system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    messages.append({"role": "user", "content": prompt})
+
+                    response = self.client.chat.completions.create(
+                        model=self.openai_model,
                         max_tokens=max_tokens,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": prompt}
-                        ]
+                        messages=messages
                     )
-                    return response.choices[0].message.content
+                    result = response.choices[0].message.content
+                    if result:
+                        self.logger.info(f"OpenAI response received: {len(result)} chars")
+                        return result
+                    return None
 
             except Exception as e:
                 error_str = str(e)
