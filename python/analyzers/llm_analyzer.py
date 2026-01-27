@@ -125,7 +125,7 @@ class LLMAnalyzer:
 
                     response = self.client.chat.completions.create(
                         model=self.openai_model,
-                        max_tokens=max_tokens,
+                        max_completion_tokens=max_tokens,
                         messages=messages
                     )
                     result = response.choices[0].message.content
