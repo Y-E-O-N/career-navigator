@@ -115,9 +115,10 @@ def run_analysis(settings: Settings, db: Database, logger):
         try:
             # 기본 시장 분석
             analysis = market_analyzer.analyze_keyword(keyword, days=30)
-            
-            if analysis['total_postings'] == 0:
-                logger.warning(f"  → 데이터 없음")
+
+            # 데이터 없음 체크 (에러 반환 또는 total_postings가 0인 경우)
+            if analysis.get('error') or analysis.get('total_postings', 0) == 0:
+                logger.warning(f"  → 데이터 없음: {analysis.get('error', '채용공고 0건')}")
                 continue
             
             logger.info(f"  → 총 {analysis['total_postings']}개 공고 분석")
@@ -131,28 +132,34 @@ def run_analysis(settings: Settings, db: Database, logger):
             if use_llm:
                 try:
                     logger.info("  → LLM 트렌드 분석 중...")
-                    llm_analysis = llm_analyzer.analyze_market_trends(analysis)
-                    analysis['llm_analysis'] = llm_analysis.get('analysis', '')
-                    
+                    llm_result = llm_analyzer.analyze_market_trends(analysis)
+                    analysis['llm_analysis'] = llm_result.get('llm_analysis', '') if llm_result else ''
+
                     logger.info("  → 커리어 로드맵 생성 중...")
                     roadmap = llm_analyzer.generate_career_roadmap(
-                        keyword, 
+                        keyword,
                         analysis['skill_analysis'],
                         duration_months=6
                     )
-                    analysis['roadmap_3_months'] = roadmap.get('roadmap_3_months', '')
-                    analysis['roadmap_6_months'] = roadmap.get('roadmap_6_months', '')
-                    analysis['project_ideas'] = roadmap.get('project_ideas', '')
-                    
+                    # LLM은 'roadmap' 키에 전체 텍스트 반환
+                    roadmap_text = roadmap.get('roadmap', '') if roadmap else ''
+                    analysis['roadmap_3_months'] = roadmap_text
+                    analysis['roadmap_6_months'] = roadmap_text
+                    analysis['project_ideas'] = roadmap_text  # 프로젝트 아이디어도 포함됨
+
                 except Exception as e:
                     logger.error(f"  → LLM 분석 실패: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
                 # Fallback 로드맵
                 fallback = FallbackAnalyzer()
                 top_skills = [s['skill'] for s in analysis['skill_analysis'].get('hard_skills', [])[:10]]
                 roadmap = fallback.generate_basic_roadmap(keyword, top_skills)
-                analysis['roadmap_3_months'] = roadmap.get('roadmap_3_months', '')
-                analysis['roadmap_6_months'] = roadmap.get('roadmap_6_months', '')
+                # Fallback은 리스트 반환하므로 JSON 문자열로 변환
+                import json as json_module
+                analysis['roadmap_3_months'] = json_module.dumps(roadmap.get('roadmap_3_months', []), ensure_ascii=False)
+                analysis['roadmap_6_months'] = json_module.dumps(roadmap.get('roadmap_6_months', []), ensure_ascii=False)
             
             # 요약 생성
             summary = market_analyzer.generate_summary(analysis)

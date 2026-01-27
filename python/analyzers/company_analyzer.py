@@ -20,11 +20,12 @@ from config.settings import settings
 
 class CompanyAnalyzer:
     """회사 분석기"""
-    
-    def __init__(self):
+
+    def __init__(self, database=None):
         self.logger = setup_logger("analyzer.company")
+        self.db = database if database else db
         self.rate_limiter = RateLimiter(0.5)  # 2초에 1회
-        
+
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': settings.crawler.user_agent,
