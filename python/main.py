@@ -131,6 +131,7 @@ def run_analysis(settings: Settings, db: Database, logger):
             analysis['trends'] = trends
             
             # LLM 분석 (사용 가능한 경우)
+            llm_roadmap_success = False
             if use_llm:
                 try:
                     logger.info("  → LLM 트렌드 분석 중...")
@@ -145,16 +146,25 @@ def run_analysis(settings: Settings, db: Database, logger):
                     )
                     # LLM은 'roadmap' 키에 전체 텍스트 반환
                     roadmap_text = roadmap.get('roadmap', '') if roadmap else ''
-                    analysis['roadmap_3_months'] = roadmap_text
-                    analysis['roadmap_6_months'] = roadmap_text
-                    analysis['project_ideas'] = roadmap_text  # 프로젝트 아이디어도 포함됨
+
+                    # 로드맵이 유효한지 확인 (실패 메시지가 아닌 경우만)
+                    if roadmap_text and '실패' not in roadmap_text and len(roadmap_text) > 100:
+                        analysis['roadmap_3_months'] = roadmap_text
+                        analysis['roadmap_6_months'] = roadmap_text
+                        analysis['project_ideas'] = roadmap_text
+                        llm_roadmap_success = True
+                        logger.info(f"  → LLM 로드맵 생성 성공: {len(roadmap_text)} chars")
+                    else:
+                        logger.warning(f"  → LLM 로드맵 응답이 유효하지 않음, Fallback 사용")
 
                 except Exception as e:
                     logger.error(f"  → LLM 분석 실패: {e}")
                     import traceback
                     traceback.print_exc()
-            else:
-                # Fallback 로드맵
+
+            # LLM 실패 시 또는 LLM 미사용 시 Fallback 로드맵 사용
+            if not llm_roadmap_success:
+                logger.info("  → Fallback 로드맵 생성 중...")
                 fallback = FallbackAnalyzer()
                 top_skills = [s['skill'] for s in analysis['skill_analysis'].get('hard_skills', [])[:10]]
                 roadmap = fallback.generate_basic_roadmap(keyword, top_skills)

@@ -9,6 +9,48 @@ interface TrendDetailPageProps {
   params: Promise<{ keyword: string }>;
 }
 
+// 로드맵 데이터가 JSON 배열인지 텍스트인지 확인하고 렌더링
+function RoadmapContent({ content, title }: { content: string | null; title: string }) {
+  if (!content) {
+    return <p className="text-gray-500">로드맵 정보가 없습니다.</p>;
+  }
+
+  // JSON 배열 형식인지 확인
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      return (
+        <div className="space-y-3">
+          {parsed.map((item, index) => (
+            <div key={index} className="border-l-2 border-blue-400 pl-3">
+              <div className="font-medium text-gray-800">
+                {item.week || item.month ? (item.week || `${item.month}개월차`) : `${index + 1}단계`}
+              </div>
+              <div className="text-sm text-gray-600">{item.topic}</div>
+              {item.project && (
+                <div className="text-xs text-blue-600">프로젝트: {item.project}</div>
+              )}
+              {item.milestone && (
+                <div className="text-xs text-green-600">목표: {item.milestone}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+  } catch {
+    // JSON 파싱 실패 = 일반 텍스트
+  }
+
+  // 실패 메시지 체크
+  if (content.includes('실패')) {
+    return <p className="text-gray-500">{title} 생성에 실패했습니다.</p>;
+  }
+
+  // 일반 텍스트 (LLM 응답)
+  return <p className="whitespace-pre-wrap text-gray-700 text-sm">{content}</p>;
+}
+
 async function getAnalysis(keyword: string): Promise<MarketAnalysis | null> {
   const supabase = await createServerClient();
   const decodedKeyword = decodeURIComponent(keyword);
@@ -202,20 +244,16 @@ export default async function TrendDetailPage({ params }: TrendDetailPageProps) 
 
       {/* Roadmaps */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {analysis.roadmap_3months && (
-          <Card title="3개월 로드맵">
-            <div className="prose max-w-none text-sm">
-              <p className="whitespace-pre-wrap text-gray-700">{analysis.roadmap_3months}</p>
-            </div>
-          </Card>
-        )}
-        {analysis.roadmap_6months && (
-          <Card title="6개월 로드맵">
-            <div className="prose max-w-none text-sm">
-              <p className="whitespace-pre-wrap text-gray-700">{analysis.roadmap_6months}</p>
-            </div>
-          </Card>
-        )}
+        <Card title="3개월 단기 로드맵">
+          <div className="prose max-w-none">
+            <RoadmapContent content={analysis.roadmap_3months} title="단기 로드맵" />
+          </div>
+        </Card>
+        <Card title="6개월 중기 로드맵">
+          <div className="prose max-w-none">
+            <RoadmapContent content={analysis.roadmap_6months} title="중기 로드맵" />
+          </div>
+        </Card>
       </div>
     </div>
   );

@@ -86,6 +86,7 @@ class LLMAnalyzer:
             if self.provider == "gemini":
                 # Gemini - 새 google.genai API 사용
                 full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                self.logger.debug(f"Calling Gemini model: {self.gemini_model}")
                 response = self.client.models.generate_content(
                     model=self.gemini_model,
                     contents=full_prompt,
@@ -94,7 +95,13 @@ class LLMAnalyzer:
                         temperature=0.7,
                     )
                 )
-                return response.text
+                # 응답 검증
+                if response and hasattr(response, 'text') and response.text:
+                    self.logger.info(f"Gemini response received: {len(response.text)} chars")
+                    return response.text
+                else:
+                    self.logger.warning(f"Gemini response empty or invalid: {response}")
+                    return None
 
             elif self.provider == "anthropic":
                 message = self.client.messages.create(
@@ -120,6 +127,8 @@ class LLMAnalyzer:
 
         except Exception as e:
             self.logger.error(f"LLM API call failed: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
     
     def analyze_market_trends(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
