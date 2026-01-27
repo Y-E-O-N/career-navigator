@@ -246,54 +246,66 @@ def run_company_analysis(company_name: str, db: Database, logger):
     return result
 
 
-def run_top_companies_analysis(settings: Settings, db: Database, logger, top_n: int = 10):
-    """상위 채용 기업 자동 분석"""
+def run_top_companies_analysis(settings: Settings, db: Database, logger):
+    """DB에 정보가 없는 모든 회사 분석"""
     logger.info("=" * 60)
-    logger.info("상위 채용 기업 분석 시작")
+    logger.info("회사 정보 수집 시작")
     logger.info("=" * 60)
 
     analyzer = CompanyAnalyzer(db)
+    session = db.get_session()
 
-    # 각 키워드별 상위 채용 기업 분석
-    keywords = settings.search_keywords.main_keywords[:3]  # 상위 3개 키워드만
-    analyzed_companies = set()
+    try:
+        from utils.database import JobPosting, Company
 
-    for keyword in keywords:
-        logger.info(f"\n[{keyword}] 상위 채용 기업 조회...")
-        top_companies = analyzer.get_top_hiring_companies(keyword=keyword, days=30, limit=5)
+        # 1. 채용공고에 있는 모든 고유 회사명 조회
+        all_companies = session.query(JobPosting.company_name).distinct().all()
+        all_company_names = set(name[0] for name in all_companies if name[0])
 
-        for company_info in top_companies:
-            company_name = company_info['company_name']
+        # 2. 이미 정보가 있는 회사 조회
+        existing_companies = session.query(Company.name).all()
+        existing_names = set(name[0] for name in existing_companies if name[0])
 
-            # 이미 분석한 회사는 스킵
-            if company_name in analyzed_companies:
-                logger.info(f"  → {company_name}: 이미 분석됨, 스킵")
-                continue
+        # 3. 정보가 없는 회사 목록
+        missing_companies = all_company_names - existing_names
 
-            analyzed_companies.add(company_name)
+        logger.info(f"총 회사 수: {len(all_company_names)}")
+        logger.info(f"정보 있는 회사: {len(existing_names)}")
+        logger.info(f"정보 없는 회사: {len(missing_companies)}")
 
+        if not missing_companies:
+            logger.info("모든 회사 정보가 이미 수집되어 있습니다.")
+            return []
+
+        # 4. 정보 없는 회사들 분석
+        analyzed = []
+        failed = []
+
+        for i, company_name in enumerate(missing_companies, 1):
             try:
-                logger.info(f"  → {company_name} 분석 중... (채용공고 {company_info['job_count']}건)")
+                logger.info(f"\n[{i}/{len(missing_companies)}] {company_name} 분석 중...")
                 result = analyzer.analyze_company(company_name)
 
                 if result and result.get('reputation', {}).get('jobplanet_rating'):
                     rating = result['reputation']['jobplanet_rating']
-                    logger.info(f"    잡플래닛 평점: {rating}/5.0")
+                    logger.info(f"  → 잡플래닛 평점: {rating}/5.0")
+                    analyzed.append(company_name)
+                elif result:
+                    logger.info(f"  → 잡플래닛 정보 없음 (DB에 기본 정보 저장)")
+                    analyzed.append(company_name)
                 else:
-                    logger.info(f"    잡플래닛 정보 없음")
+                    logger.warning(f"  → 분석 실패")
+                    failed.append(company_name)
 
             except Exception as e:
-                logger.warning(f"    분석 실패: {e}")
+                logger.warning(f"  → 분석 실패: {e}")
+                failed.append(company_name)
 
-            # 상위 N개 회사만 분석
-            if len(analyzed_companies) >= top_n:
-                break
+        logger.info(f"\n회사 분석 완료: 성공 {len(analyzed)}개, 실패 {len(failed)}개")
+        return analyzed
 
-        if len(analyzed_companies) >= top_n:
-            break
-
-    logger.info(f"\n회사 분석 완료: {len(analyzed_companies)}개 기업")
-    return list(analyzed_companies)
+    finally:
+        session.close()
 
 
 def generate_reports(settings: Settings, db: Database, logger):
