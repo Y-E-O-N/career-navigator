@@ -150,6 +150,8 @@ export interface Database {
           market_summary: string | null;
           trend_analysis: string | null;
           recommendations: string | null;
+          llm_analysis: string | null;
+          project_ideas: string | null;
           roadmap_3months: string | null;
           roadmap_6months: string | null;
           created_at: string;
@@ -164,6 +166,8 @@ export interface Database {
           market_summary?: string | null;
           trend_analysis?: string | null;
           recommendations?: string | null;
+          llm_analysis?: string | null;
+          project_ideas?: string | null;
           roadmap_3months?: string | null;
           roadmap_6months?: string | null;
         };
@@ -177,6 +181,8 @@ export interface Database {
           market_summary?: string | null;
           trend_analysis?: string | null;
           recommendations?: string | null;
+          llm_analysis?: string | null;
+          project_ideas?: string | null;
           roadmap_3months?: string | null;
           roadmap_6months?: string | null;
         };
@@ -256,6 +262,8 @@ export interface Database {
           market_summary: string | null;
           trend_analysis: string | null;
           recommendations: string | null;
+          llm_analysis: string | null;
+          project_ideas: string | null;
           roadmap_3months: string | null;
           roadmap_6months: string | null;
           created_at: string;

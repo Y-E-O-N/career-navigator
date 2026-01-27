@@ -182,6 +182,24 @@ export default async function TrendDetailPage({ params }: TrendDetailPageProps) 
         </Card>
       )}
 
+      {/* LLM Analysis */}
+      {analysis.llm_analysis && (
+        <Card title="AI 시장 트렌드 분석">
+          <div className="prose max-w-none">
+            <p className="whitespace-pre-wrap text-gray-700">{analysis.llm_analysis}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Project Ideas */}
+      {analysis.project_ideas && (
+        <Card title="추천 프로젝트 아이디어">
+          <div className="prose max-w-none">
+            <p className="whitespace-pre-wrap text-gray-700">{analysis.project_ideas}</p>
+          </div>
+        </Card>
+      )}
+
       {/* Roadmaps */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {analysis.roadmap_3months && (

@@ -166,6 +166,8 @@ def run_analysis(settings: Settings, db: Database, logger):
                 'top_skills': analysis['skill_analysis'].get('hard_skills', [])[:20],
                 'market_summary': summary,
                 'trend_analysis': str(trends),
+                'llm_analysis': analysis.get('llm_analysis', ''),
+                'project_ideas': analysis.get('project_ideas', ''),
                 'roadmap_3months': analysis.get('roadmap_3_months', ''),
                 'roadmap_6months': analysis.get('roadmap_6_months', '')
             })

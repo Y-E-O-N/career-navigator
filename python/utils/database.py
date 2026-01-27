@@ -140,18 +140,20 @@ class MarketAnalysis(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     analysis_date = Column(DateTime, default=get_kst_now)
     keyword = Column(String(200))  # 분석 키워드
-    
+
     # 분석 결과
     total_postings = Column(Integer)
     avg_salary_info = Column(Text)
     top_companies = Column(JSON)  # 상위 채용 기업
     top_skills = Column(JSON)  # 상위 요구 스킬
-    
+
     # AI 분석 결과
     market_summary = Column(Text)  # 시장 요약
     trend_analysis = Column(Text)  # 트렌드 분석
     recommendations = Column(Text)  # 추천 사항
-    
+    llm_analysis = Column(Text)  # LLM 시장 트렌드 분석
+    project_ideas = Column(Text)  # LLM 프로젝트 아이디어
+
     # 로드맵
     roadmap_3months = Column(Text)  # 3개월 로드맵
     roadmap_6months = Column(Text)  # 6개월 로드맵
