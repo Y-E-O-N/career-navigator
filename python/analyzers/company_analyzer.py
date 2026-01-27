@@ -1,11 +1,10 @@
 """
 회사 분석 모듈
-사업자 조회, 평판 조사, 뉴스 수집
+채용공고 기반 회사 정보 분석 + 잡플래닛 평판 조회
 """
 
 from typing import Dict, Any, Optional, List
-import requests
-from bs4 import BeautifulSoup
+from collections import Counter
 import re
 from datetime import datetime
 import sys
@@ -13,274 +12,242 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.database import db, Company
-from utils.helpers import setup_logger, clean_text, retry_on_failure, RateLimiter
+from utils.database import db, Company, JobPosting
+from utils.helpers import setup_logger, clean_text, RateLimiter
 from config.settings import settings
+
+# Playwright 사용 가능 여부
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
 
 
 class CompanyAnalyzer:
-    """회사 분석기"""
+    """회사 분석기 - 채용공고 DB + 잡플래닛 기반"""
 
     def __init__(self, database=None):
         self.logger = setup_logger("analyzer.company")
         self.db = database if database else db
-        self.rate_limiter = RateLimiter(0.5)  # 2초에 1회
+        self.rate_limiter = RateLimiter(0.5)
 
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': settings.crawler.user_agent,
-        })
-    
     def analyze_company(self, company_name: str) -> Dict[str, Any]:
         """
         회사 종합 분석
-        
+
         Args:
             company_name: 회사명
-            
+
         Returns:
             회사 분석 결과
         """
         self.logger.info(f"Analyzing company: {company_name}")
-        
+
         result = {
             'company_name': company_name,
             'analysis_date': datetime.now().isoformat(),
         }
-        
-        # 1. 기업 기본 정보 조회 (공공 API 활용)
-        basic_info = self._get_basic_info(company_name)
-        result['basic_info'] = basic_info
-        
-        # 2. 기업 평판 조회
-        reputation = self._get_reputation(company_name)
+
+        # 1. 채용공고 DB에서 회사 정보 집계
+        job_based_info = self._analyze_from_job_postings(company_name)
+        result['basic_info'] = job_based_info.get('basic_info', {})
+        result['job_stats'] = job_based_info.get('job_stats', {})
+
+        # 2. 잡플래닛 평판 조회 (Playwright 사용)
+        reputation = self._get_jobplanet_rating(company_name)
         result['reputation'] = reputation
-        
-        # 3. 최근 뉴스 수집
-        news = self._get_news(company_name)
-        result['news'] = news
-        
-        # 4. 종합 평가
+
+        # 3. 종합 평가
         result['summary'] = self._generate_summary(result)
-        
+
         # DB에 저장
         self._save_to_db(result)
-        
+
         return result
-    
-    def _get_basic_info(self, company_name: str) -> Dict[str, Any]:
-        """기업 기본 정보 조회"""
-        info = {
-            'name': company_name,
-            'business_number': None,
-            'industry': None,
-            'company_size': None,
-            'founded_year': None,
-            'address': None,
-            'website': None,
-        }
-        
+
+    def _analyze_from_job_postings(self, company_name: str) -> Dict[str, Any]:
+        """채용공고 DB에서 회사 정보 분석"""
+        session = self.db.get_session()
+
         try:
-            # 사업자등록 조회 (공공데이터포털 API 활용 가능)
-            # 여기서는 크롤링으로 대체
-            search_results = self._search_company_info(company_name)
-            info.update(search_results)
-            
-        except Exception as e:
-            self.logger.error(f"Error getting basic info for {company_name}: {e}")
-        
-        return info
-    
-    def _search_company_info(self, company_name: str) -> Dict[str, Any]:
-        """기업 정보 검색"""
-        info = {}
-        
-        try:
-            self.rate_limiter.wait()
-            
-            # 여러 소스에서 정보 수집 시도
-            # 1. 크레딧잡 (기업 정보 사이트)
-            creditjob_info = self._search_creditjob(company_name)
-            info.update(creditjob_info)
-            
-        except Exception as e:
-            self.logger.warning(f"Could not get company info: {e}")
-        
-        return info
-    
-    @retry_on_failure(max_retries=2, delay=1.0)
-    def _search_creditjob(self, company_name: str) -> Dict[str, Any]:
-        """크레딧잡에서 기업 정보 검색"""
-        info = {}
-        
-        try:
-            # 크레딧잡 검색
-            search_url = f"https://www.creditjob.co.kr/search?q={company_name}"
-            response = self.session.get(search_url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # 검색 결과에서 정보 추출
-                company_card = soup.select_one('.company-card, .search-result-item')
-                
-                if company_card:
-                    # 산업 분야
-                    industry_elem = company_card.select_one('.industry, .sector')
-                    if industry_elem:
-                        info['industry'] = clean_text(industry_elem.text)
-                    
-                    # 기업 규모
-                    size_elem = company_card.select_one('.company-size, .employee')
-                    if size_elem:
-                        info['company_size'] = clean_text(size_elem.text)
-                    
-                    # 설립년도
-                    founded_elem = company_card.select_one('.founded, .establish')
-                    if founded_elem:
-                        year_match = re.search(r'\d{4}', clean_text(founded_elem.text))
-                        if year_match:
-                            info['founded_year'] = int(year_match.group())
-                            
-        except Exception as e:
-            self.logger.debug(f"Creditjob search failed: {e}")
-        
-        return info
-    
-    def _get_reputation(self, company_name: str) -> Dict[str, Any]:
-        """기업 평판 조회"""
+            # 해당 회사의 채용공고 조회
+            jobs = session.query(JobPosting).filter(
+                JobPosting.company_name.ilike(f"%{company_name}%")
+            ).all()
+
+            if not jobs:
+                return {
+                    'basic_info': {'name': company_name},
+                    'job_stats': {'total_postings': 0}
+                }
+
+            # 기본 정보 추출 (첫 번째 공고에서)
+            first_job = jobs[0]
+            basic_info = {
+                'name': company_name,
+                'industry': getattr(first_job, 'company_industry', None),
+                'location': None,
+                'website': None,
+            }
+
+            # 지역 정보 집계
+            locations = [job.location for job in jobs if job.location]
+            if locations:
+                location_counts = Counter(locations)
+                basic_info['location'] = location_counts.most_common(1)[0][0]
+
+            # 채용 통계
+            skills = []
+            job_categories = []
+            experience_levels = []
+
+            for job in jobs:
+                if job.required_skills:
+                    if isinstance(job.required_skills, list):
+                        skills.extend(job.required_skills)
+                if job.job_category:
+                    job_categories.append(job.job_category)
+                if job.position_level:
+                    experience_levels.append(job.position_level)
+
+            job_stats = {
+                'total_postings': len(jobs),
+                'top_skills': [{'skill': s, 'count': c} for s, c in Counter(skills).most_common(10)],
+                'job_categories': [{'category': c, 'count': cnt} for c, cnt in Counter(job_categories).most_common(5)],
+                'experience_levels': [{'level': l, 'count': c} for l, c in Counter(experience_levels).most_common()],
+                'sources': [{'site': s, 'count': c} for s, c in Counter(job.source_site for job in jobs).most_common()],
+            }
+
+            return {
+                'basic_info': basic_info,
+                'job_stats': job_stats
+            }
+
+        finally:
+            session.close()
+
+    def _get_jobplanet_rating(self, company_name: str) -> Dict[str, Any]:
+        """잡플래닛에서 회사 평점 조회 (Playwright 사용)"""
         reputation = {
             'jobplanet_rating': None,
-            'jobplanet_summary': None,
-            'glassdoor_rating': None,
-            'blind_summary': None,
-            'overall_sentiment': 'neutral',
+            'jobplanet_review_count': None,
+            'jobplanet_url': None,
+            'overall_sentiment': 'unknown',
         }
-        
-        try:
-            # 잡플래닛 평점 조회
-            jobplanet_data = self._get_jobplanet_rating(company_name)
-            reputation.update(jobplanet_data)
-            
-        except Exception as e:
-            self.logger.warning(f"Error getting reputation: {e}")
-        
-        return reputation
-    
-    @retry_on_failure(max_retries=2, delay=1.0)
-    def _get_jobplanet_rating(self, company_name: str) -> Dict[str, Any]:
-        """잡플래닛 평점 조회"""
-        result = {}
-        
+
+        if not PLAYWRIGHT_AVAILABLE:
+            self.logger.warning("Playwright not available, skipping Jobplanet")
+            return reputation
+
         try:
             self.rate_limiter.wait()
-            
-            # 잡플래닛 검색
             search_url = f"https://www.jobplanet.co.kr/search?query={company_name}"
-            response = self.session.get(search_url, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # 평점 추출
-                rating_elem = soup.select_one('.rating_score, .rate_point, .score')
-                if rating_elem:
-                    rating_text = clean_text(rating_elem.text)
-                    rating_match = re.search(r'[\d.]+', rating_text)
-                    if rating_match:
-                        result['jobplanet_rating'] = float(rating_match.group())
-                
-                # 리뷰 요약 추출
-                summary_elem = soup.select_one('.review_summary, .summary_text')
-                if summary_elem:
-                    result['jobplanet_summary'] = clean_text(summary_elem.text)[:500]
-                    
+
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+
+                try:
+                    page.goto(search_url, timeout=15000)
+                    page.wait_for_load_state('networkidle', timeout=10000)
+
+                    # 검색 결과에서 회사 카드 찾기
+                    company_cards = page.query_selector_all('[class*="CompanyCard"], [class*="company_card"], .result_card')
+
+                    for card in company_cards[:3]:  # 상위 3개만 확인
+                        try:
+                            # 회사명 확인
+                            name_elem = card.query_selector('[class*="name"], [class*="title"], h2, h3')
+                            if name_elem:
+                                card_name = name_elem.text_content().strip()
+                                if company_name.lower() in card_name.lower():
+                                    # 평점 추출
+                                    rating_elem = card.query_selector('[class*="rating"], [class*="score"], [class*="rate"]')
+                                    if rating_elem:
+                                        rating_text = rating_elem.text_content()
+                                        rating_match = re.search(r'(\d+\.?\d*)', rating_text)
+                                        if rating_match:
+                                            reputation['jobplanet_rating'] = float(rating_match.group(1))
+
+                                    # 리뷰 수 추출
+                                    review_elem = card.query_selector('[class*="review"], [class*="count"]')
+                                    if review_elem:
+                                        review_text = review_elem.text_content()
+                                        review_match = re.search(r'(\d+)', review_text.replace(',', ''))
+                                        if review_match:
+                                            reputation['jobplanet_review_count'] = int(review_match.group(1))
+
+                                    # 회사 페이지 URL
+                                    link_elem = card.query_selector('a[href*="/companies/"]')
+                                    if link_elem:
+                                        reputation['jobplanet_url'] = link_elem.get_attribute('href')
+
+                                    break
+                        except Exception as e:
+                            self.logger.debug(f"Error parsing company card: {e}")
+
+                    # 평점 기반 sentiment 설정
+                    if reputation['jobplanet_rating']:
+                        rating = reputation['jobplanet_rating']
+                        if rating >= 4.0:
+                            reputation['overall_sentiment'] = 'very_positive'
+                        elif rating >= 3.5:
+                            reputation['overall_sentiment'] = 'positive'
+                        elif rating >= 3.0:
+                            reputation['overall_sentiment'] = 'neutral'
+                        elif rating >= 2.5:
+                            reputation['overall_sentiment'] = 'negative'
+                        else:
+                            reputation['overall_sentiment'] = 'very_negative'
+
+                except Exception as e:
+                    self.logger.warning(f"Jobplanet page load failed: {e}")
+                finally:
+                    browser.close()
+
         except Exception as e:
-            self.logger.debug(f"Jobplanet search failed: {e}")
-        
-        return result
-    
-    def _get_news(self, company_name: str, max_news: int = 10) -> List[Dict[str, Any]]:
-        """최근 뉴스 수집"""
-        news_list = []
-        
-        try:
-            self.rate_limiter.wait()
-            
-            # 네이버 뉴스 검색
-            search_url = "https://search.naver.com/search.naver"
-            params = {
-                'where': 'news',
-                'query': company_name,
-                'sort': 1,  # 최신순
-            }
-            
-            response = self.session.get(search_url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # 뉴스 기사 추출
-                news_items = soup.select('.news_wrap, .news_area, .bx')[:max_news]
-                
-                for item in news_items:
-                    try:
-                        title_elem = item.select_one('.news_tit, .title, a.link')
-                        source_elem = item.select_one('.info_group a, .source, .press')
-                        date_elem = item.select_one('.info_group span, .date, .time')
-                        
-                        if title_elem:
-                            news_data = {
-                                'title': clean_text(title_elem.text),
-                                'url': title_elem.get('href', ''),
-                                'source': clean_text(source_elem.text) if source_elem else '',
-                                'date': clean_text(date_elem.text) if date_elem else '',
-                            }
-                            news_list.append(news_data)
-                            
-                    except Exception as e:
-                        self.logger.debug(f"Error parsing news item: {e}")
-                        
-        except Exception as e:
-            self.logger.warning(f"Error getting news: {e}")
-        
-        return news_list
+            self.logger.error(f"Jobplanet search failed: {e}")
+
+        return reputation
     
     def _generate_summary(self, analysis: Dict[str, Any]) -> Dict[str, str]:
         """분석 결과 요약 생성"""
         company_name = analysis.get('company_name', '')
         basic_info = analysis.get('basic_info', {})
+        job_stats = analysis.get('job_stats', {})
         reputation = analysis.get('reputation', {})
-        news = analysis.get('news', [])
-        
+
         # 기본 정보 요약
         info_parts = []
         if basic_info.get('industry'):
             info_parts.append(f"산업: {basic_info['industry']}")
-        if basic_info.get('company_size'):
-            info_parts.append(f"규모: {basic_info['company_size']}")
-        if basic_info.get('founded_year'):
-            info_parts.append(f"설립: {basic_info['founded_year']}년")
-        
-        basic_summary = ', '.join(info_parts) if info_parts else "기본 정보를 찾을 수 없습니다."
-        
+        if basic_info.get('location'):
+            info_parts.append(f"주요 근무지: {basic_info['location']}")
+
+        basic_summary = ', '.join(info_parts) if info_parts else "기본 정보 없음"
+
+        # 채용 현황 요약
+        job_summary_parts = []
+        total = job_stats.get('total_postings', 0)
+        if total > 0:
+            job_summary_parts.append(f"채용공고 {total}건")
+            top_skills = job_stats.get('top_skills', [])[:3]
+            if top_skills:
+                skills_str = ', '.join([s['skill'] for s in top_skills])
+                job_summary_parts.append(f"주요 스킬: {skills_str}")
+
+        job_summary = ' | '.join(job_summary_parts) if job_summary_parts else "채용공고 없음"
+
         # 평판 요약
         reputation_parts = []
         if reputation.get('jobplanet_rating'):
-            reputation_parts.append(f"잡플래닛 평점: {reputation['jobplanet_rating']}/5.0")
-        if reputation.get('jobplanet_summary'):
-            reputation_parts.append(reputation['jobplanet_summary'][:200])
-        
-        reputation_summary = ' | '.join(reputation_parts) if reputation_parts else "평판 정보를 찾을 수 없습니다."
-        
-        # 뉴스 요약
-        news_summary = ""
-        if news:
-            news_titles = [n['title'] for n in news[:5]]
-            news_summary = f"최근 뉴스 {len(news)}건: " + ' / '.join(news_titles[:3])
-        else:
-            news_summary = "최근 뉴스를 찾을 수 없습니다."
-        
+            reputation_parts.append(f"잡플래닛 {reputation['jobplanet_rating']}/5.0")
+        if reputation.get('jobplanet_review_count'):
+            reputation_parts.append(f"리뷰 {reputation['jobplanet_review_count']}개")
+
+        reputation_summary = ' | '.join(reputation_parts) if reputation_parts else "평판 정보 없음"
+
         # 종합 평가
         overall = "정보 부족"
         if reputation.get('jobplanet_rating'):
@@ -295,43 +262,77 @@ class CompanyAnalyzer:
                 overall = "주의 필요"
             else:
                 overall = "신중한 검토 필요"
-        
+        elif total > 10:
+            overall = "활발한 채용 중"
+
         return {
             'basic': basic_summary,
+            'jobs': job_summary,
             'reputation': reputation_summary,
-            'news': news_summary,
             'overall': overall,
         }
-    
+
     def _save_to_db(self, analysis: Dict[str, Any]):
         """분석 결과 DB 저장"""
         try:
             basic_info = analysis.get('basic_info', {})
             reputation = analysis.get('reputation', {})
             summary = analysis.get('summary', {})
-            
+
             company_data = {
                 'name': analysis['company_name'],
                 'industry': basic_info.get('industry'),
-                'company_size': basic_info.get('company_size'),
-                'founded_year': basic_info.get('founded_year'),
-                'address': basic_info.get('address'),
-                'website': basic_info.get('website'),
-                'business_number': basic_info.get('business_number'),
+                'address': basic_info.get('location'),
                 'jobplanet_rating': reputation.get('jobplanet_rating'),
                 'public_sentiment': summary.get('overall'),
-                'news_summary': summary.get('news'),
             }
-            
-            db.add_company(company_data)
-            
+
+            self.db.add_company(company_data)
+
         except Exception as e:
             self.logger.error(f"Error saving to DB: {e}")
-    
+
+    def get_top_hiring_companies(self, keyword: str = None, days: int = 30, limit: int = 20) -> List[Dict[str, Any]]:
+        """채용공고가 많은 상위 회사 목록"""
+        session = self.db.get_session()
+
+        try:
+            from datetime import timedelta
+            from sqlalchemy import func
+
+            query = session.query(
+                JobPosting.company_name,
+                func.count(JobPosting.id).label('job_count')
+            )
+
+            if keyword:
+                query = query.filter(
+                    (JobPosting.title.ilike(f"%{keyword}%")) |
+                    (JobPosting.description.ilike(f"%{keyword}%"))
+                )
+
+            # 최근 N일
+            from utils.database import get_kst_now
+            cutoff = get_kst_now() - timedelta(days=days)
+            query = query.filter(JobPosting.crawled_at >= cutoff)
+
+            results = query.group_by(JobPosting.company_name)\
+                .order_by(func.count(JobPosting.id).desc())\
+                .limit(limit)\
+                .all()
+
+            return [
+                {'company_name': r[0], 'job_count': r[1]}
+                for r in results
+            ]
+
+        finally:
+            session.close()
+
     def analyze_companies_batch(self, company_names: List[str]) -> List[Dict[str, Any]]:
         """여러 회사 일괄 분석"""
         results = []
-        
+
         for company_name in company_names:
             try:
                 result = self.analyze_company(company_name)
@@ -342,20 +343,22 @@ class CompanyAnalyzer:
                     'company_name': company_name,
                     'error': str(e)
                 })
-        
+
         return results
-    
-    def close(self):
-        """세션 종료"""
-        self.session.close()
 
 
 # 테스트용
 if __name__ == "__main__":
     analyzer = CompanyAnalyzer()
-    
-    result = analyzer.analyze_company("카카오")
-    print(f"\n회사: {result['company_name']}")
-    print(f"요약: {result.get('summary', {})}")
-    
-    analyzer.close()
+
+    # 채용 많은 회사 조회
+    top_companies = analyzer.get_top_hiring_companies(keyword="백엔드", limit=10)
+    print("채용 많은 회사:")
+    for c in top_companies:
+        print(f"  {c['company_name']}: {c['job_count']}건")
+
+    # 특정 회사 분석
+    if top_companies:
+        result = analyzer.analyze_company(top_companies[0]['company_name'])
+        print(f"\n회사 분석: {result['company_name']}")
+        print(f"요약: {result.get('summary', {})}")
