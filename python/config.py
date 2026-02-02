@@ -22,13 +22,14 @@ class CrawlerConfig:
     """크롤러 설정"""
     # 크롤링 대상 사이트
     enabled_sites: List[str] = field(default_factory=lambda: [
-        "wanted", "saramin", "jobkorea", "jumpit", "programmers"
+        "wanted"
+        # , "saramin", "jobkorea", "jumpit", "programmers"
     ])
     
     # 검색 키워드
     search_keywords: List[str] = field(default_factory=lambda: [
-        "python", "데이터분석", "백엔드", "프론트엔드", 
-        "머신러닝", "데이터엔지니어", "DevOps"
+        "AI 엔지니어", "머신러닝", "데이터 분석", "데이터 사이언티스트", 
+        "데이터 엔지니어", "LLM", "LangChain"
     ])
     
     # 요청 설정
