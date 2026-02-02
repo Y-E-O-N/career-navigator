@@ -2495,18 +2495,19 @@ class CompanyAnalyzer:
                             break
                         await asyncio.sleep(0.3)
 
-                    # Q&A 수집
+                    # Q&A 수집 (답변 선택지 비율, 연차별 데이터, 기타 의견 포함)
                     qna_js = r'''
                         JSON.stringify((() => {
                             const qnas = [];
-                            const containers = document.querySelectorAll('.border-t.border-t-gray-50, [class*="border-t"][class*="py-"]');
+                            const containers = document.querySelectorAll('.border-t.border-t-gray-50[class*="py-"], div[class*="border-t"][class*="py-[28px]"]');
 
                             containers.forEach(container => {
                                 const qna = {
                                     category: '',
                                     question: '',
-                                    answers: [],
-                                    other_opinions: []
+                                    answer_choices: [],  // 답변 선택지와 비율
+                                    year_breakdown: {},  // 연차별 응답 결과
+                                    other_opinions: []   // 기타 의견 (프로필 포함)
                                 };
 
                                 // 카테고리
@@ -2519,31 +2520,59 @@ class CompanyAnalyzer:
                                     qna.question = qEl.innerText.replace(/^Q\.\s*/, '').trim();
                                 }
 
-                                // 답변들 (A.)
-                                const answerEls = container.querySelectorAll('[class*="text-green-500"]:not(.text-h7)');
-                                answerEls.forEach(el => {
-                                    const parent = el.closest('div');
-                                    if (parent) {
-                                        const text = parent.innerText.replace(/^A\.\s*/, '').trim();
-                                        if (text && text.length > 5) {
-                                            qna.answers.push(text.substring(0, 500));
+                                // 답변 선택지와 비율 (A. 43%, B. 40% 등)
+                                const choiceEls = container.querySelectorAll('li[class*="rounded-"][class*="border"]');
+                                choiceEls.forEach(li => {
+                                    const spans = li.querySelectorAll('span.relative');
+                                    if (spans.length >= 2) {
+                                        const text = spans[0].innerText.trim();
+                                        const percent = spans[1].innerText.trim().replace('%', '');
+                                        const labelMatch = text.match(/^([A-Z])\.\s*/);
+                                        if (labelMatch) {
+                                            qna.answer_choices.push({
+                                                label: labelMatch[1],
+                                                text: text.replace(/^[A-Z]\.\s*/, ''),
+                                                percent: parseInt(percent) || 0
+                                            });
                                         }
                                     }
                                 });
 
-                                // 기타 의견
-                                const opinionSection = container.querySelector('[class*="기타 의견"]');
-                                if (opinionSection) {
-                                    const opinionParent = opinionSection.closest('div').parentElement;
-                                    if (opinionParent) {
-                                        const opinions = opinionParent.querySelectorAll('.py-\\[20px\\]');
-                                        opinions.forEach(op => {
-                                            const text = op.innerText.trim();
-                                            if (text && text.length > 5) {
-                                                qna.other_opinions.push(text.substring(0, 300));
-                                            }
-                                        });
+                                // 연차별 응답 결과 탭
+                                const yearTabs = container.querySelectorAll('ul.flex.border-b li button');
+                                const currentYear = container.querySelector('ul.flex.border-b li.border-gray-700 button, ul.flex.border-b li[class*="border-b-[2px]"]:not([class*="border-transparent"]) button');
+                                if (currentYear) {
+                                    const yearLabel = currentYear.innerText.trim();
+                                    const yearData = {};
+                                    const bars = container.querySelectorAll('.group[class*="orange"], .group[class*="green"], .group[class*="blue"], .group[class*="purple"]');
+                                    bars.forEach(bar => {
+                                        const percentEl = bar.querySelector('[class*="w-[38px]"]');
+                                        const labelEl = bar.querySelector('.item_index_text');
+                                        if (percentEl && labelEl) {
+                                            const label = labelEl.innerText.trim();
+                                            const percent = percentEl.innerText.trim().replace('%', '');
+                                            yearData[label] = parseInt(percent) || 0;
+                                        }
+                                    });
+                                    if (Object.keys(yearData).length > 0) {
+                                        qna.year_breakdown[yearLabel] = yearData;
                                     }
+                                }
+
+                                // 기타 의견 (프로필 정보 포함)
+                                const opinionHeader = Array.from(container.querySelectorAll('div')).find(d => d.innerText.includes('기타 의견'));
+                                if (opinionHeader) {
+                                    const opinionItems = container.querySelectorAll('.py-\\[20px\\], div[class*="py-[20px]"]');
+                                    opinionItems.forEach(item => {
+                                        const profileEl = item.querySelector('.text-gray-400, [class*="text-gray-400"]');
+                                        const contentEl = item.querySelector('.text-gray-800, [class*="text-gray-800"]');
+                                        if (profileEl && contentEl) {
+                                            qna.other_opinions.push({
+                                                profile: profileEl.innerText.trim(),  // "영업/제휴 · 전직원 · 2024. 08."
+                                                content: contentEl.innerText.trim().substring(0, 500)
+                                            });
+                                        }
+                                    });
                                 }
 
                                 if (qna.question) {
