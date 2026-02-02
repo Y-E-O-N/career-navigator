@@ -44,6 +44,7 @@ class WantedPlaywrightCrawler:
         self.browser: Optional[Browser] = None
         self.context = None
         self.request_delay = settings.crawler.request_delay
+        self.last_found_job_ids = set()  # 마지막 크롤링에서 발견된 모든 job_id
 
     async def init_browser(self, headless: bool = True):
         """브라우저 초기화"""
@@ -238,6 +239,116 @@ class WantedPlaywrightCrawler:
         except Exception as e:
             self.logger.debug(f"카드 파싱 오류: {e}")
             return None
+
+    async def check_job_active(self, job_id: str) -> dict:
+        """
+        채용공고 활성 상태 확인
+
+        Returns:
+            dict: {
+                'job_id': str,
+                'is_active': bool,
+                'status': str,  # 'active', 'expired', 'deleted', 'error'
+                'reason': str   # 상태 설명
+            }
+        """
+        if not self.browser:
+            await self.init_browser()
+
+        page = await self.context.new_page()
+        url = f"{self.base_url}/wd/{job_id}"
+
+        result = {
+            'job_id': job_id,
+            'is_active': False,
+            'status': 'error',
+            'reason': ''
+        }
+
+        try:
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(2)
+
+            # 1. HTTP 상태 코드 확인
+            if response and response.status == 404:
+                result['status'] = 'deleted'
+                result['reason'] = 'HTTP 404 - 페이지 없음'
+                return result
+
+            # 2. URL 리다이렉트 확인 (삭제된 공고는 다른 페이지로 리다이렉트됨)
+            current_url = page.url
+            if '/wd/' not in current_url:
+                result['status'] = 'deleted'
+                result['reason'] = f'리다이렉트됨: {current_url}'
+                return result
+
+            # 3. 페이지 내용 확인 - 만료/마감 메시지
+            page_content = await page.content()
+
+            # 마감된 공고 체크
+            expired_indicators = [
+                '마감된 포지션',
+                '마감되었습니다',
+                '채용이 마감',
+                '모집이 마감',
+                '지원 마감',
+                'This position has been closed',
+                'Position closed'
+            ]
+
+            for indicator in expired_indicators:
+                if indicator in page_content:
+                    result['status'] = 'expired'
+                    result['reason'] = f'마감된 공고: {indicator}'
+                    return result
+
+            # 4. 정상 공고 확인 - 제목 또는 회사명이 있는지
+            title_elem = await page.query_selector('h1.wds-58fmok, h1[class*="wds-"]')
+            company_elem = await page.query_selector('a[class*="JobHeader"][class*="Company__Link"]')
+
+            if title_elem or company_elem:
+                result['is_active'] = True
+                result['status'] = 'active'
+                result['reason'] = '정상 활성 공고'
+            else:
+                # 공고 정보가 없으면 삭제된 것으로 간주
+                result['status'] = 'deleted'
+                result['reason'] = '공고 정보를 찾을 수 없음'
+
+        except Exception as e:
+            result['status'] = 'error'
+            result['reason'] = f'확인 실패: {str(e)}'
+            self.logger.warning(f"공고 상태 확인 실패 ({job_id}): {e}")
+
+        finally:
+            await page.close()
+
+        return result
+
+    async def check_jobs_active_batch(self, job_ids: List[str], batch_size: int = 10) -> List[dict]:
+        """
+        여러 채용공고의 활성 상태를 일괄 확인
+
+        Args:
+            job_ids: 확인할 job_id 목록
+            batch_size: 동시에 확인할 개수 (메모리/속도 균형)
+
+        Returns:
+            List[dict]: 각 공고의 상태 정보 목록
+        """
+        results = []
+        total = len(job_ids)
+
+        for i in range(0, total, batch_size):
+            batch = job_ids[i:i + batch_size]
+            self.logger.info(f"공고 상태 확인 중: {i + 1}-{min(i + batch_size, total)}/{total}")
+
+            for job_id in batch:
+                result = await self.check_job_active(job_id)
+                results.append(result)
+                await asyncio.sleep(self.request_delay / 2)  # 속도 조절
+
+        return results
 
     async def get_job_detail(self, job_id: str) -> Optional[Dict]:
         """
@@ -469,6 +580,10 @@ class WantedPlaywrightCrawler:
             # 1. 검색 결과 수집
             jobs = await self.search_jobs(keyword, max_pages)
 
+            # 발견된 모든 job_id 저장 (삭제 감지용)
+            self.last_found_job_ids = {str(job.get('job_id', '')) for job in jobs if job.get('job_id')}
+            self.logger.info(f"검색에서 발견된 job_id: {len(self.last_found_job_ids)}개")
+
             # 2. 기존 DB에 없는 채용공고만 필터링 (job_id를 문자열로 비교)
             new_jobs = [job for job in jobs if str(job.get('job_id', '')) not in existing_job_ids]
             skipped_count = len(jobs) - len(new_jobs)
@@ -516,6 +631,11 @@ class WantedCrawler:
         self.playwright_crawler = WantedPlaywrightCrawler()
         self.site_name = 'wanted'
         self.logger = setup_logger(f"crawler.{self.site_name}")
+
+    @property
+    def last_found_job_ids(self) -> set:
+        """마지막 크롤링에서 발견된 모든 job_id"""
+        return self.playwright_crawler.last_found_job_ids
 
     def crawl_keyword(self, keyword: str, max_pages: int = None) -> List[Dict]:
         """키워드로 크롤링 실행"""
@@ -569,6 +689,54 @@ class WantedCrawler:
                 await self.playwright_crawler.close_browser()
 
         return loop.run_until_complete(_get_detail())
+
+    def check_job_active(self, job_id: str) -> dict:
+        """채용공고 활성 상태 확인"""
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import nest_asyncio
+                    nest_asyncio.apply()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            async def _check():
+                try:
+                    await self.playwright_crawler.init_browser()
+                    return await self.playwright_crawler.check_job_active(job_id)
+                finally:
+                    await self.playwright_crawler.close_browser()
+
+            return loop.run_until_complete(_check())
+        except Exception as e:
+            self.logger.error(f"상태 확인 실패: {e}")
+            return {'job_id': job_id, 'is_active': True, 'status': 'error', 'reason': str(e)}
+
+    def check_jobs_active_batch(self, job_ids: List[str]) -> List[dict]:
+        """여러 채용공고의 활성 상태를 일괄 확인"""
+        try:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import nest_asyncio
+                    nest_asyncio.apply()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            async def _check_batch():
+                try:
+                    await self.playwright_crawler.init_browser()
+                    return await self.playwright_crawler.check_jobs_active_batch(job_ids)
+                finally:
+                    await self.playwright_crawler.close_browser()
+
+            return loop.run_until_complete(_check_batch())
+        except Exception as e:
+            self.logger.error(f"일괄 상태 확인 실패: {e}")
+            return [{'job_id': jid, 'is_active': True, 'status': 'error', 'reason': str(e)} for jid in job_ids]
 
 
 # 테스트 코드
