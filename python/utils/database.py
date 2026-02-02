@@ -72,7 +72,7 @@ class JobPosting(Base):
     crawled_at = Column(DateTime, default=get_kst_now)
     posted_at = Column(DateTime)
     expires_at = Column(DateTime)
-    is_active = Column(Boolean, default=True)
+    status = Column(String(20), default='모집중')  # 모집중, 마감
 
     # 관계
     company = relationship("Company", back_populates="job_postings")
@@ -112,8 +112,8 @@ class Company(Base):
     # 잡플래닛 추가 정보 (JSON)
     additional_info = Column(Text)  # 연봉, 면접, 복지 등 JSON
 
-    # 메타
-    last_updated = Column(DateTime, default=get_kst_now)
+    # 메타 (DB 컬럼명은 updated_at)
+    updated_at = Column('updated_at', DateTime, default=get_kst_now)
 
     # 관계
     job_postings = relationship("JobPosting", back_populates="company")
@@ -136,6 +136,32 @@ class SkillTrend(Base):
     analysis_date = Column(DateTime, default=get_kst_now)
     period_start = Column(DateTime)
     period_end = Column(DateTime)
+
+
+class CrawlResult(Base):
+    """크롤링 결과 추적 테이블"""
+    __tablename__ = 'crawl_results'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    crawl_date = Column(DateTime, default=get_kst_now, nullable=False)
+    crawl_type = Column(String(50), nullable=False)  # 'jobs' or 'companies'
+    source_site = Column(String(50))  # wanted, saramin, jobkorea 등
+    keyword = Column(String(200))  # 검색 키워드
+
+    # 크롤링 통계
+    total_found = Column(Integer, default=0)  # 검색 결과 총 개수
+    new_count = Column(Integer, default=0)  # 새로 추가된 공고
+    existing_count = Column(Integer, default=0)  # 기존 공고 (업데이트)
+    deleted_count = Column(Integer, default=0)  # 삭제된 공고 (이전 대비)
+
+    # 상세 정보 (JSON)
+    new_job_ids = Column(JSON)  # 새로 추가된 job_id 목록
+    deleted_job_ids = Column(JSON)  # 삭제된 job_id 목록
+
+    # 상태
+    status = Column(String(50), default='completed')  # completed, failed
+    error_message = Column(Text)
+    duration_seconds = Column(Float)  # 크롤링 소요 시간
 
 
 class MarketAnalysis(Base):
@@ -234,7 +260,7 @@ class Database:
                 for key, value in company_data.items():
                     if hasattr(existing, key) and value is not None:
                         setattr(existing, key, value)
-                existing.last_updated = get_kst_now()
+                existing.updated_at = get_kst_now()
                 session.commit()
                 return existing
             else:
@@ -307,6 +333,91 @@ class Database:
                 .filter(MarketAnalysis.keyword == keyword)\
                 .order_by(MarketAnalysis.analysis_date.desc())\
                 .first()
+        finally:
+            session.close()
+
+    def get_active_job_ids(self, source_site: str, days: int = 1) -> set:
+        """특정 사이트의 활성 job_id 목록 조회 (최근 N일 내 크롤링된)"""
+        session = self.get_session()
+        try:
+            from datetime import timedelta
+            cutoff = get_kst_now() - timedelta(days=days)
+            result = session.query(JobPosting.job_id).filter(
+                JobPosting.source_site == source_site,
+                JobPosting.status == '모집중',
+                JobPosting.crawled_at >= cutoff
+            ).all()
+            return {str(row[0]) for row in result if row[0]}
+        finally:
+            session.close()
+
+    def get_all_active_job_ids(self, source_site: str) -> set:
+        """특정 사이트의 모든 활성 job_id 목록 조회"""
+        session = self.get_session()
+        try:
+            result = session.query(JobPosting.job_id).filter(
+                JobPosting.source_site == source_site,
+                JobPosting.status == '모집중'
+            ).all()
+            return {str(row[0]) for row in result if row[0]}
+        finally:
+            session.close()
+
+    def mark_jobs_as_closed(self, source_site: str, job_ids: List[str]) -> int:
+        """특정 job_id들을 마감 처리"""
+        if not job_ids:
+            return 0
+        session = self.get_session()
+        try:
+            updated = session.query(JobPosting).filter(
+                JobPosting.source_site == source_site,
+                JobPosting.job_id.in_(job_ids)
+            ).update({JobPosting.status: '마감'}, synchronize_session=False)
+            session.commit()
+            return updated
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def save_crawl_result(self, crawl_data: dict) -> CrawlResult:
+        """크롤링 결과 저장"""
+        session = self.get_session()
+        try:
+            crawl_result = CrawlResult(**crawl_data)
+            session.add(crawl_result)
+            session.commit()
+            return crawl_result
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def get_unique_companies_from_postings(self) -> List[str]:
+        """채용공고에서 고유 회사명 목록 조회"""
+        session = self.get_session()
+        try:
+            result = session.query(JobPosting.company_name).distinct().all()
+            return [name[0] for name in result if name[0]]
+        finally:
+            session.close()
+
+    def get_companies_without_info(self) -> List[str]:
+        """잡플래닛 정보가 없는 회사 목록 조회"""
+        session = self.get_session()
+        try:
+            # 채용공고에 있는 모든 회사
+            all_companies = session.query(JobPosting.company_name).distinct().all()
+            all_company_names = set(name[0] for name in all_companies if name[0])
+
+            # 이미 정보가 있는 회사
+            existing = session.query(Company.name).all()
+            existing_names = set(name[0] for name in existing if name[0])
+
+            # 차집합
+            return list(all_company_names - existing_names)
         finally:
             session.close()
 
