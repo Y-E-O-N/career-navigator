@@ -1707,19 +1707,22 @@ class CompanyAnalyzer:
                         if (levelEl) data.difficulty.level = levelEl.innerText.trim();
                     }
 
-                    // 면접 경로 테이블
+                    // 면접 경로 테이블 (각 행에 2개씩 있음)
                     const routeTable = document.querySelector('table[summary="면접경로"]');
                     if (routeTable) {
                         const rows = routeTable.querySelectorAll('tr');
                         rows.forEach(row => {
-                            const th = row.querySelector('th');
-                            const td = row.querySelector('td');
-                            if (th && td) {
-                                data.routes.push({
-                                    route: th.innerText.trim(),
-                                    percent: td.innerText.trim()
-                                });
-                            }
+                            const ths = row.querySelectorAll('th');
+                            const tds = row.querySelectorAll('td:not(.empty)');
+                            ths.forEach((th, idx) => {
+                                const td = tds[idx];
+                                if (th && td) {
+                                    data.routes.push({
+                                        route: th.innerText.trim(),
+                                        percent: td.innerText.trim()
+                                    });
+                                }
+                            });
                         });
                     }
 
