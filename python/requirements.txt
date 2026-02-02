@@ -5,6 +5,8 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 playwright>=1.40.0    # Browser automation for dynamic pages
+playwright-stealth>=1.0.6  # Cloudflare bypass
+nodriver>=0.38  # Undetected browser automation (Cloudflare bypass)
 nest-asyncio>=1.5.0   # Async loop compatibility
 
 # Database
