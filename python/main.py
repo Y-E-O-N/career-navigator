@@ -4,10 +4,17 @@
 Job Market Analyzer - 메인 실행 스크립트
 
 사용법:
-    python main.py crawl              # 크롤링만 실행
-    python main.py analyze            # 분석만 실행
+    # 크롤링 (분리된 플로우)
+    python main.py crawl-jobs         # 1차 크롤링: 채용공고 수집 (신규/기존/삭제 추적)
+    python main.py crawl-companies    # 2차 크롤링: 회사정보 수집 (잡플래닛)
+    python main.py crawl              # 전체 크롤링 (1차 + 2차)
+
+    # 분석 및 리포트
+    python main.py analyze            # 시장 분석 실행
     python main.py report             # 리포트 생성
     python main.py all                # 전체 실행 (크롤링 → 분석 → 리포트)
+
+    # 기타
     python main.py schedule           # 스케줄러 시작
     python main.py company "회사이름"  # 특정 회사 분석
 """
@@ -37,10 +44,27 @@ def create_directories():
         Path(d).mkdir(exist_ok=True)
 
 
-def run_crawling(settings: Settings, db: Database, logger):
-    """크롤링 실행"""
+def run_job_crawling(settings: Settings, db: Database, logger) -> dict:
+    """
+    1차 크롤링: 채용공고 수집
+
+    전일 대비 새로 추가된 공고, 기존 공고, 삭제된 공고를 추적합니다.
+
+    Returns:
+        dict: 크롤링 결과 통계
+        {
+            'total_found': int,      # 검색에서 발견된 총 공고 수
+            'new_count': int,        # 새로 추가된 공고 수
+            'existing_count': int,   # 기존 공고 (업데이트)
+            'deleted_count': int,    # 삭제된 공고 수
+            'companies': set,        # 발견된 회사 목록
+        }
+    """
+    import time
+    from datetime import datetime
+
     logger.info("=" * 60)
-    logger.info("크롤링 시작")
+    logger.info("1차 크롤링: 채용공고 수집 시작")
     logger.info("=" * 60)
 
     sites = settings.search_keywords.sites
@@ -51,7 +75,14 @@ def run_crawling(settings: Settings, db: Database, logger):
         logger.info(f"연차 키워드: {[k for k in settings.search_keywords.experience_keywords if k]}")
         logger.info(f"지역 키워드: {[k for k in settings.search_keywords.location_keywords if k]}")
 
-    total_jobs = 0
+    # 전체 통계
+    total_stats = {
+        'total_found': 0,
+        'new_count': 0,
+        'existing_count': 0,
+        'deleted_count': 0,
+        'companies': set(),
+    }
 
     for site_name, enabled in sites.items():
         if not enabled:
@@ -64,29 +95,216 @@ def run_crawling(settings: Settings, db: Database, logger):
                 logger.warning(f"[{site_name}] 크롤러를 찾을 수 없음")
                 continue
 
+            # 크롤링 전: 해당 사이트의 기존 활성 job_id 목록 조회
+            previous_job_ids = db.get_all_active_job_ids(site_name)
+            logger.info(f"[{site_name}] 기존 활성 공고: {len(previous_job_ids)}개")
+
             # 사이트별 최적화된 키워드 가져오기
             keywords = settings.search_keywords.get_keywords_for_site(site_name)
             logger.info(f"\n[{site_name}] 크롤링 시작 ({len(keywords)}개 키워드)")
 
+            site_found_job_ids = set()  # 이번 크롤링에서 발견된 모든 job_id
+            site_stats = {'new': 0, 'existing': 0, 'total': 0}
+
             for keyword in keywords:
+                start_time = time.time()
                 logger.info(f"  키워드: {keyword}")
+
                 try:
                     jobs = crawler.crawl_keyword(keyword)
+                    site_stats['total'] += len(jobs)
+
+                    # 크롤러에서 발견한 모든 job_id 수집 (삭제 감지용)
+                    if hasattr(crawler, 'last_found_job_ids') and crawler.last_found_job_ids:
+                        site_found_job_ids.update(crawler.last_found_job_ids)
 
                     for job in jobs:
+                        job_id = str(job.get('job_id', ''))
+                        company_name = job.get('company_name', '')
+
+                        if job_id:
+                            site_found_job_ids.add(job_id)
+
+                        if company_name:
+                            total_stats['companies'].add(company_name)
+
+                        # DB에 저장 (중복 시 업데이트)
+                        is_new = job_id not in previous_job_ids
                         db.add_job_posting(job)
 
-                    logger.info(f"    → {len(jobs)}개 수집")
-                    total_jobs += len(jobs)
+                        if is_new:
+                            site_stats['new'] += 1
+                        else:
+                            site_stats['existing'] += 1
+
+                    duration = time.time() - start_time
+                    logger.info(f"    → {len(jobs)}개 수집 (신규: {site_stats['new']}, 소요: {duration:.1f}초)")
+
+                    # 크롤링 결과 저장
+                    db.save_crawl_result({
+                        'crawl_type': 'jobs',
+                        'source_site': site_name,
+                        'keyword': keyword,
+                        'total_found': len(jobs),
+                        'new_count': site_stats['new'],
+                        'existing_count': site_stats['existing'],
+                        'duration_seconds': duration,
+                        'status': 'completed'
+                    })
 
                 except Exception as e:
                     logger.error(f"    → 크롤링 실패: {e}")
+                    db.save_crawl_result({
+                        'crawl_type': 'jobs',
+                        'source_site': site_name,
+                        'keyword': keyword,
+                        'status': 'failed',
+                        'error_message': str(e)
+                    })
+
+            # 삭제 감지: 이전에는 있었는데 이번 크롤링에서 발견되지 않은 공고
+            deleted_job_ids = previous_job_ids - site_found_job_ids
+
+            # 마감된 공고 처리
+            if deleted_job_ids:
+                closed = db.mark_jobs_as_closed(site_name, list(deleted_job_ids))
+                total_stats['deleted_count'] += closed
+                logger.info(f"[{site_name}] {closed}개 공고 마감 처리")
+
+            # 사이트별 통계 집계
+            total_stats['total_found'] += site_stats['total']
+            total_stats['new_count'] += site_stats['new']
+            total_stats['existing_count'] += site_stats['existing']
+
+            logger.info(f"\n[{site_name}] 크롤링 완료:")
+            logger.info(f"  - 발견: {site_stats['total']}개")
+            logger.info(f"  - 신규: {site_stats['new']}개")
+            logger.info(f"  - 기존: {site_stats['existing']}개")
+            logger.info(f"  - 삭제(마감): {len(deleted_job_ids)}개")
 
         except Exception as e:
             logger.error(f"[{site_name}] 크롤러 초기화 실패: {e}")
 
-    logger.info(f"\n크롤링 완료: 총 {total_jobs}개 채용공고 수집")
-    return total_jobs
+    logger.info("\n" + "=" * 60)
+    logger.info("1차 크롤링 완료 (채용공고)")
+    logger.info("=" * 60)
+    logger.info(f"총 발견: {total_stats['total_found']}개")
+    logger.info(f"신규 추가: {total_stats['new_count']}개")
+    logger.info(f"기존 업데이트: {total_stats['existing_count']}개")
+    logger.info(f"삭제 처리: {total_stats['deleted_count']}개")
+    logger.info(f"발견된 회사: {len(total_stats['companies'])}개")
+
+    return total_stats
+
+
+def run_company_crawling(settings: Settings, db: Database, logger, max_companies: int = 1) -> dict:
+    """
+    2차 크롤링: 회사정보 수집 (잡플래닛)
+
+    1차 크롤링에서 발견된 회사들 중 정보가 없는 회사를 잡플래닛에서 검색하여
+    가능한 모든 정보를 수집합니다.
+
+    Args:
+        max_companies: 한 번에 처리할 최대 회사 수 (차단 방지, 기본 10개)
+
+    Returns:
+        dict: 크롤링 결과 통계
+    """
+    import time
+
+    logger.info("=" * 60)
+    logger.info("2차 크롤링: 회사정보 수집 시작 (잡플래닛)")
+    logger.info("=" * 60)
+
+    analyzer = CompanyAnalyzer(db)
+
+    # 정보가 없는 회사 목록 조회
+    all_missing = db.get_companies_without_info()
+
+    # 한 번에 처리할 회사 수 제한 (차단 방지)
+    missing_companies = all_missing[:max_companies]
+
+    logger.info(f"정보 없는 회사: {len(all_missing)}개 (이번 처리: {len(missing_companies)}개)")
+
+    if not missing_companies:
+        logger.info("모든 회사 정보가 이미 수집되어 있습니다.")
+        return {'total': 0, 'success': 0, 'failed': 0, 'remaining': 0}
+
+    stats = {'total': len(missing_companies), 'success': 0, 'failed': 0, 'remaining': len(all_missing) - len(missing_companies)}
+    failed_companies = []
+
+    try:
+        for i, company_name in enumerate(missing_companies, 1):
+            start_time = time.time()
+
+            try:
+                logger.info(f"\n[{i}/{len(missing_companies)}] {company_name} 분석 중...")
+                result = analyzer.analyze_company(company_name)
+
+                duration = time.time() - start_time
+
+                if result and result.get('reputation', {}).get('jobplanet_rating'):
+                    rating = result['reputation']['jobplanet_rating']
+                    logger.info(f"  → 잡플래닛 평점: {rating}/5.0 (소요: {duration:.1f}초)")
+                    stats['success'] += 1
+                elif result:
+                    logger.info(f"  → 잡플래닛 정보 없음 (기본 정보 저장, 소요: {duration:.1f}초)")
+                    stats['success'] += 1
+                else:
+                    logger.warning(f"  → 분석 실패")
+                    stats['failed'] += 1
+                    failed_companies.append(company_name)
+
+                # 크롤링 결과 저장
+                db.save_crawl_result({
+                    'crawl_type': 'companies',
+                    'source_site': 'jobplanet',
+                    'keyword': company_name,
+                    'total_found': 1 if result else 0,
+                    'new_count': 1 if result else 0,
+                    'duration_seconds': duration,
+                    'status': 'completed' if result else 'failed'
+                })
+
+            except Exception as e:
+                logger.warning(f"  → 분석 실패: {e}")
+                stats['failed'] += 1
+                failed_companies.append(company_name)
+    finally:
+        # 중단되더라도 브라우저 종료 보장
+        analyzer.close()
+
+    logger.info("\n" + "=" * 60)
+    logger.info("2차 크롤링 완료 (회사정보)")
+    logger.info("=" * 60)
+    logger.info(f"이번 처리: {stats['total']}개")
+    logger.info(f"성공: {stats['success']}개")
+    logger.info(f"실패: {stats['failed']}개")
+    logger.info(f"남은 회사: {stats['remaining']}개")
+
+    if failed_companies:
+        logger.info(f"실패한 회사: {failed_companies[:10]}{'...' if len(failed_companies) > 10 else ''}")
+
+    return stats
+
+
+def run_crawling(settings: Settings, db: Database, logger):
+    """전체 크롤링 실행 (1차 + 2차)"""
+    logger.info("=" * 60)
+    logger.info("전체 크롤링 시작 (1차 채용공고 + 2차 회사정보)")
+    logger.info("=" * 60)
+
+    # 1차: 채용공고 크롤링
+    job_stats = run_job_crawling(settings, db, logger)
+
+    # 2차: 회사정보 크롤링
+    company_stats = run_company_crawling(settings, db, logger)
+
+    logger.info("\n" + "=" * 60)
+    logger.info("전체 크롤링 완료")
+    logger.info("=" * 60)
+
+    return job_stats.get('total_found', 0)
 
 
 def run_analysis(settings: Settings, db: Database, logger):
@@ -208,9 +426,12 @@ def run_company_analysis(company_name: str, db: Database, logger):
     logger.info("=" * 60)
     logger.info(f"회사 분석: {company_name}")
     logger.info("=" * 60)
-    
+
     analyzer = CompanyAnalyzer(db)
-    result = analyzer.analyze_company(company_name)
+    try:
+        result = analyzer.analyze_company(company_name)
+    finally:
+        analyzer.close()
     
     if result:
         logger.info(f"\n기본 정보:")
@@ -247,65 +468,144 @@ def run_company_analysis(company_name: str, db: Database, logger):
 
 
 def run_top_companies_analysis(settings: Settings, db: Database, logger):
-    """DB에 정보가 없는 모든 회사 분석"""
+    """DB에 정보가 없는 모든 회사 분석 (레거시 - run_company_crawling으로 대체)"""
+    # run_company_crawling 함수로 위임
+    return run_company_crawling(settings, db, logger)
+
+
+def run_check_expired(settings: Settings, db: Database, logger, days: int = 7) -> dict:
+    """
+    만료/삭제된 채용공고 확인
+
+    DB에 있는 활성 공고들의 URL에 접근하여 실제로 아직 유효한지 확인합니다.
+    만료되거나 삭제된 공고는 status='마감'으로 처리합니다.
+
+    Args:
+        days: 최근 N일 이내에 크롤링된 공고만 확인 (기본 7일)
+
+    Returns:
+        dict: 확인 결과 통계
+    """
+    import time
+    from datetime import timedelta
+    from utils.database import JobPosting, get_kst_now
+
     logger.info("=" * 60)
-    logger.info("회사 정보 수집 시작")
+    logger.info("만료/삭제 공고 확인 시작")
     logger.info("=" * 60)
 
-    analyzer = CompanyAnalyzer(db)
+    stats = {
+        'total_checked': 0,
+        'active': 0,
+        'expired': 0,
+        'deleted': 0,
+        'error': 0
+    }
+
     session = db.get_session()
 
     try:
-        from utils.database import JobPosting, Company
+        # 확인할 공고 조회 (최근 N일 내 크롤링된 활성 공고)
+        cutoff = get_kst_now() - timedelta(days=days)
+        active_jobs = session.query(JobPosting).filter(
+            JobPosting.status == '모집중',
+            JobPosting.crawled_at >= cutoff
+        ).all()
 
-        # 1. 채용공고에 있는 모든 고유 회사명 조회
-        all_companies = session.query(JobPosting.company_name).distinct().all()
-        all_company_names = set(name[0] for name in all_companies if name[0])
+        # 사이트별로 그룹핑
+        jobs_by_site = {}
+        for job in active_jobs:
+            site = job.source_site
+            if site not in jobs_by_site:
+                jobs_by_site[site] = []
+            jobs_by_site[site].append(job)
 
-        # 2. 이미 정보가 있는 회사 조회
-        existing_companies = session.query(Company.name).all()
-        existing_names = set(name[0] for name in existing_companies if name[0])
+        logger.info(f"확인 대상: {len(active_jobs)}개 공고 (최근 {days}일)")
+        for site, jobs in jobs_by_site.items():
+            logger.info(f"  - {site}: {len(jobs)}개")
 
-        # 3. 정보가 없는 회사 목록
-        missing_companies = all_company_names - existing_names
+        # 사이트별 처리
+        for site_name, jobs in jobs_by_site.items():
+            if site_name != 'wanted':
+                logger.info(f"[{site_name}] 만료 확인 미지원 - 건너뜀")
+                continue
 
-        logger.info(f"총 회사 수: {len(all_company_names)}")
-        logger.info(f"정보 있는 회사: {len(existing_names)}")
-        logger.info(f"정보 없는 회사: {len(missing_companies)}")
+            logger.info(f"\n[{site_name}] 만료 확인 시작 ({len(jobs)}개)")
 
-        if not missing_companies:
-            logger.info("모든 회사 정보가 이미 수집되어 있습니다.")
-            return []
-
-        # 4. 정보 없는 회사들 분석
-        analyzed = []
-        failed = []
-
-        for i, company_name in enumerate(missing_companies, 1):
             try:
-                logger.info(f"\n[{i}/{len(missing_companies)}] {company_name} 분석 중...")
-                result = analyzer.analyze_company(company_name)
+                crawler = get_crawler(site_name)
+                if not crawler or not hasattr(crawler, 'check_jobs_active_batch'):
+                    logger.warning(f"[{site_name}] 만료 확인 기능 없음")
+                    continue
 
-                if result and result.get('reputation', {}).get('jobplanet_rating'):
-                    rating = result['reputation']['jobplanet_rating']
-                    logger.info(f"  → 잡플래닛 평점: {rating}/5.0")
-                    analyzed.append(company_name)
-                elif result:
-                    logger.info(f"  → 잡플래닛 정보 없음 (DB에 기본 정보 저장)")
-                    analyzed.append(company_name)
-                else:
-                    logger.warning(f"  → 분석 실패")
-                    failed.append(company_name)
+                job_ids = [job.job_id for job in jobs]
+
+                # 일괄 확인
+                start_time = time.time()
+                results = crawler.check_jobs_active_batch(job_ids)
+                duration = time.time() - start_time
+
+                # 결과 처리
+                expired_ids = []
+                deleted_ids = []
+
+                for result in results:
+                    stats['total_checked'] += 1
+                    status = result.get('status', 'error')
+                    job_id = result.get('job_id')
+
+                    if status == 'active':
+                        stats['active'] += 1
+                    elif status == 'expired':
+                        stats['expired'] += 1
+                        expired_ids.append(job_id)
+                        logger.info(f"  만료: {job_id} - {result.get('reason', '')}")
+                    elif status == 'deleted':
+                        stats['deleted'] += 1
+                        deleted_ids.append(job_id)
+                        logger.info(f"  삭제: {job_id} - {result.get('reason', '')}")
+                    else:
+                        stats['error'] += 1
+                        logger.warning(f"  오류: {job_id} - {result.get('reason', '')}")
+
+                # 만료/삭제된 공고 비활성화
+                all_inactive_ids = expired_ids + deleted_ids
+                if all_inactive_ids:
+                    closed = db.mark_jobs_as_closed(site_name, all_inactive_ids)
+                    logger.info(f"[{site_name}] {closed}개 공고 마감 처리")
+
+                # 크롤링 결과 저장
+                db.save_crawl_result({
+                    'crawl_type': 'check_expired',
+                    'source_site': site_name,
+                    'total_found': len(jobs),
+                    'existing_count': stats['active'],
+                    'deleted_count': len(all_inactive_ids),
+                    'duration_seconds': duration,
+                    'status': 'completed',
+                    'deleted_job_ids': all_inactive_ids[:100] if all_inactive_ids else None  # 최대 100개만 저장
+                })
+
+                logger.info(f"[{site_name}] 확인 완료 (소요: {duration:.1f}초)")
 
             except Exception as e:
-                logger.warning(f"  → 분석 실패: {e}")
-                failed.append(company_name)
-
-        logger.info(f"\n회사 분석 완료: 성공 {len(analyzed)}개, 실패 {len(failed)}개")
-        return analyzed
+                logger.error(f"[{site_name}] 만료 확인 실패: {e}")
+                import traceback
+                traceback.print_exc()
 
     finally:
         session.close()
+
+    logger.info("\n" + "=" * 60)
+    logger.info("만료/삭제 공고 확인 완료")
+    logger.info("=" * 60)
+    logger.info(f"총 확인: {stats['total_checked']}개")
+    logger.info(f"활성: {stats['active']}개")
+    logger.info(f"만료: {stats['expired']}개")
+    logger.info(f"삭제: {stats['deleted']}개")
+    logger.info(f"오류: {stats['error']}개")
+
+    return stats
 
 
 def generate_reports(settings: Settings, db: Database, logger):
@@ -385,17 +685,18 @@ def run_all(settings: Settings, db: Database, logger, force_analyze: bool = Fals
 
     start_time = datetime.now()
 
-    # 1. 크롤링
-    total_jobs = run_crawling(settings, db, logger)
+    # 1차 크롤링: 채용공고 수집
+    job_stats = run_job_crawling(settings, db, logger)
+    total_jobs = job_stats.get('total_found', 0)
 
-    # 2. 분석
+    # 2차 크롤링: 회사정보 수집
+    run_company_crawling(settings, db, logger)
+
+    # 3. 시장 분석
     if total_jobs > 0 or force_analyze:
         if force_analyze and total_jobs == 0:
             logger.info("강제 분석 모드: DB에 있는 기존 데이터로 분석을 실행합니다.")
         results = run_analysis(settings, db, logger)
-
-        # 3. 회사 분석 (상위 채용 기업)
-        run_top_companies_analysis(settings, db, logger)
 
         # 4. 리포트 생성
         if results:
@@ -418,8 +719,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 예시:
-    python main.py crawl              # 크롤링만 실행
-    python main.py analyze            # 분석만 실행  
+    python main.py crawl-jobs         # 1차 크롤링: 채용공고 수집
+    python main.py crawl-companies    # 2차 크롤링: 회사정보 수집
+    python main.py crawl              # 전체 크롤링 (1차 + 2차)
+    python main.py check-expired      # 만료/삭제 공고 확인
+    python main.py analyze            # 분석만 실행
     python main.py report             # 리포트 생성
     python main.py all                # 전체 실행
     python main.py schedule           # 스케줄러 시작
@@ -427,10 +731,10 @@ def main():
     python main.py --config my.json all  # 설정 파일 지정
         """
     )
-    
+
     parser.add_argument(
         'command',
-        choices=['crawl', 'analyze', 'report', 'all', 'schedule', 'company'],
+        choices=['crawl', 'crawl-jobs', 'crawl-companies', 'check-expired', 'analyze', 'report', 'all', 'schedule', 'company'],
         help='실행할 명령'
     )
     
@@ -492,7 +796,21 @@ def main():
         action='store_true',
         help='크롤링 결과와 관계없이 분석 강제 실행 (DB에 있는 기존 데이터 사용)'
     )
-    
+
+    parser.add_argument(
+        '--days',
+        type=int,
+        default=7,
+        help='check-expired 명령에서 확인할 공고의 최근 일수 (기본: 7)'
+    )
+
+    parser.add_argument(
+        '--max-companies',
+        type=int,
+        default=1,
+        help='crawl-companies 명령에서 한 번에 처리할 최대 회사 수 (차단 방지, 기본: 1)'
+    )
+
     args = parser.parse_args()
     
     # 디렉토리 생성
@@ -539,21 +857,34 @@ def main():
     
     # 명령 실행
     try:
-        if args.command == 'crawl':
+        if args.command == 'crawl-jobs':
+            # 1차 크롤링: 채용공고만
+            run_job_crawling(settings, db, logger)
+
+        elif args.command == 'crawl-companies':
+            # 2차 크롤링: 회사정보만
+            run_company_crawling(settings, db, logger, max_companies=args.max_companies)
+
+        elif args.command == 'crawl':
+            # 전체 크롤링 (1차 + 2차)
             run_crawling(settings, db, logger)
-            
+
+        elif args.command == 'check-expired':
+            # 만료/삭제 공고 확인
+            run_check_expired(settings, db, logger, days=args.days)
+
         elif args.command == 'analyze':
             run_analysis(settings, db, logger)
-            
+
         elif args.command == 'report':
             generate_reports(settings, db, logger)
-            
+
         elif args.command == 'all':
             run_all(settings, db, logger, force_analyze=args.force_analyze)
-            
+
         elif args.command == 'schedule':
             run_scheduler(settings, db, logger)
-            
+
         elif args.command == 'company':
             if not args.target:
                 logger.error("회사 이름을 지정해주세요. 예: python main.py company '카카오'")
