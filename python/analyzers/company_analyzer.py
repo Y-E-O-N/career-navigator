@@ -217,7 +217,7 @@ class CompanyAnalyzer:
                     pass
                 return False
 
-            await asyncio.sleep(8)  # 로그인 처리 대기
+            await asyncio.sleep(settings.jobplanet.login_delay)  # 로그인 처리 대기
 
             # 디버깅: 로그인 버튼 클릭 후 스크린샷
             try:
@@ -487,6 +487,14 @@ class CompanyAnalyzer:
         # 9. 수집된 리뷰 목록
         result['reviews'] = jobplanet_info.get('reviews', [])
         result['reviews_collected'] = jobplanet_info.get('reviews_collected', 0)
+
+        # 9-1. 수집된 면접 후기 목록
+        result['interviews'] = jobplanet_info.get('interviews', [])
+        result['interviews_collected'] = jobplanet_info.get('interviews_collected', 0)
+
+        # 9-2. 수집된 복지 후기 목록
+        result['welfare_reviews'] = jobplanet_info.get('welfare_reviews', [])
+        result['welfare_reviews_collected'] = jobplanet_info.get('welfare_reviews_count', 0)
 
         # 10. 만족도 점수
         result['satisfaction_scores'] = jobplanet_info.get('satisfaction_scores', {})
@@ -862,6 +870,23 @@ class CompanyAnalyzer:
             base_url = f"https://www.jobplanet.co.kr/companies/{company_id}"
             info['jobplanet_url'] = base_url
 
+            # 4-1. 기본 정보 즉시 저장 (companies 테이블) → db_company_id 획득
+            try:
+                basic_company_data = {
+                    'name': company_name,
+                    'industry': info.get('industry'),
+                    'location': info.get('location'),
+                    'jobplanet_rating': info.get('jobplanet_rating'),
+                    'jobplanet_url': info.get('jobplanet_url'),
+                }
+                self.db.add_company(basic_company_data)
+                db_company_id = self.db.get_company_id_by_name(company_name)
+                info['db_company_id'] = db_company_id
+                self.logger.info(f"  → 기본 정보 DB 저장 완료 (company_id: {db_company_id})")
+            except Exception as e:
+                self.logger.warning(f"  → 기본 정보 DB 저장 실패: {e}")
+                info['db_company_id'] = None
+
             # 5. 회사 상세 페이지 방문하여 추가 정보 수집
             await asyncio.sleep(1)
             company_name_encoded = matched_company.get('name', '')
@@ -990,6 +1015,30 @@ class CompanyAnalyzer:
 
                     # 탭별 데이터 추출
                     await extractor(page, info)
+
+                    # 탭별 데이터 즉시 DB 저장
+                    db_company_id = info.get('db_company_id')
+                    try:
+                        if tab_name == '리뷰' and info.get('reviews'):
+                            count = self.db.add_company_reviews(
+                                company_name, info['reviews'], db_company_id
+                            )
+                            self.logger.info(f"  → 리뷰 DB 저장: {count}개")
+
+                        elif tab_name == '면접' and info.get('interviews'):
+                            count = self.db.add_company_interviews(
+                                company_name, info['interviews'], db_company_id
+                            )
+                            self.logger.info(f"  → 면접 후기 DB 저장: {count}개")
+
+                        elif tab_name == '복지' and info.get('welfare_reviews'):
+                            count = self.db.add_company_benefits(
+                                company_name, info['welfare_reviews'], db_company_id
+                            )
+                            self.logger.info(f"  → 복지 후기 DB 저장: {count}개")
+
+                    except Exception as save_err:
+                        self.logger.warning(f"  → {tab_name} DB 저장 실패: {save_err}")
 
                 except Exception as e:
                     self.logger.warning(f"Tab {tab_name} crawl error: {e}")
@@ -1358,8 +1407,9 @@ class CompanyAnalyzer:
             pre_check = await page.evaluate(pre_extract_check_js)
             self.logger.info(f"    → 리뷰 추출 전 상태: {pre_check}")
 
-            # 9. 개별 리뷰 추출 (최대 50페이지)
-            max_pages = 50
+            # 9. 개별 리뷰 추출 (설정에서 페이지 수 가져옴)
+            max_pages = settings.jobplanet.review_max_pages
+            max_reviews = settings.jobplanet.review_max_count
             all_reviews = []
             try:
                 base_url_result = await page.evaluate('window.location.href.split("?")[0]')
@@ -1587,8 +1637,8 @@ class CompanyAnalyzer:
                     except:
                         break
 
-                if len(all_reviews) >= 500:
-                    self.logger.info(f"    → 500개 리뷰 도달, 수집 종료")
+                if len(all_reviews) >= max_reviews:
+                    self.logger.info(f"    → {max_reviews}개 리뷰 도달, 수집 종료")
                     break
 
             reviews_data['reviews'] = all_reviews
@@ -2199,8 +2249,9 @@ class CompanyAnalyzer:
             # 2. 스크롤하여 개별 면접 후기 로드
             await self._scroll_to_bottom_incrementally(page)
 
-            # 3. 개별 면접 후기 수집 (최대 50페이지)
-            max_pages = 50
+            # 3. 개별 면접 후기 수집 (설정에서 페이지 수 가져옴)
+            max_pages = settings.jobplanet.interview_max_pages
+            max_interviews = settings.jobplanet.interview_max_count
             all_interviews = []
             try:
                 base_url_result = await page.evaluate('window.location.href.split("?")[0]')
@@ -2332,8 +2383,8 @@ class CompanyAnalyzer:
                     except:
                         break
 
-                if len(all_interviews) >= 300:
-                    self.logger.info(f"    → 300개 면접 후기 도달, 수집 종료")
+                if len(all_interviews) >= max_interviews:
+                    self.logger.info(f"    → {max_interviews}개 면접 후기 도달, 수집 종료")
                     break
 
             interview_data['interviews'] = all_interviews
@@ -2528,7 +2579,7 @@ class CompanyAnalyzer:
             # 4. 복지 후기 수집 (페이지네이션 포함) - 상세 정보 포함
             await self._scroll_to_bottom_incrementally(page)
 
-            max_pages = 20
+            max_pages = settings.jobplanet.benefit_max_pages
             all_reviews = []
             base_url = await page.evaluate('window.location.href.split("?")[0]')
 
@@ -3386,6 +3437,8 @@ class CompanyAnalyzer:
             }
 
             self.db.add_company(company_data)
+            self.logger.info(f"  → 회사 최종 정보 DB 업데이트 완료")
+            # 참고: 개별 리뷰, 면접 후기, 복지 후기는 탭별로 이미 저장됨
 
         except Exception as e:
             self.logger.error(f"Error saving to DB: {e}")
