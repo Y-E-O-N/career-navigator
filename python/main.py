@@ -197,7 +197,7 @@ def run_job_crawling(settings: Settings, db: Database, logger) -> dict:
     return total_stats
 
 
-def run_company_crawling(settings: Settings, db: Database, logger, max_companies: int = 1) -> dict:
+def run_company_crawling(settings: Settings, db: Database, logger, max_companies: int = 1, resume: bool = True) -> dict:
     """
     2차 크롤링: 회사정보 수집 (잡플래닛)
 
@@ -206,11 +206,13 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
 
     Args:
         max_companies: 한 번에 처리할 최대 회사 수 (차단 방지, 기본 10개)
+        resume: True이면 이미 jobplanet_rating이 있는 회사는 건너뛰고, 불완전한 회사는 재수집
 
     Returns:
         dict: 크롤링 결과 통계
     """
     import time
+    import json
 
     logger.info("=" * 60)
     logger.info("2차 크롤링: 회사정보 수집 시작 (잡플래닛)")
@@ -218,13 +220,29 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
 
     analyzer = CompanyAnalyzer(db)
 
-    # 정보가 없는 회사 목록 조회
-    all_missing = db.get_companies_without_info()
+    # 정보가 없거나 불완전한 회사 목록 조회 (resume 모드에 따라)
+    all_missing = db.get_companies_without_info(include_incomplete=resume)
+
+    # 진행 상황 파일 로드 (세션 내 중복 방지)
+    progress_file = Path("data/crawl_progress.json")
+    processed_in_session = set()
+
+    if resume and progress_file.exists():
+        try:
+            with open(progress_file, 'r', encoding='utf-8') as f:
+                progress_data = json.load(f)
+                processed_in_session = set(progress_data.get('processed', []))
+                logger.info(f"이전 세션에서 처리된 회사: {len(processed_in_session)}개 (건너뜀)")
+        except Exception as e:
+            logger.warning(f"진행 상황 파일 로드 실패: {e}")
+
+    # 이미 처리된 회사 제외
+    all_missing = [c for c in all_missing if c not in processed_in_session]
 
     # 한 번에 처리할 회사 수 제한 (차단 방지)
     missing_companies = all_missing[:max_companies]
 
-    logger.info(f"정보 없는 회사: {len(all_missing)}개 (이번 처리: {len(missing_companies)}개)")
+    logger.info(f"수집 필요 회사: {len(all_missing)}개 (이번 처리: {len(missing_companies)}개)")
 
     if not missing_companies:
         logger.info("모든 회사 정보가 이미 수집되어 있습니다.")
@@ -232,6 +250,19 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
 
     stats = {'total': len(missing_companies), 'success': 0, 'failed': 0, 'remaining': len(all_missing) - len(missing_companies)}
     failed_companies = []
+
+    def save_progress():
+        """진행 상황 저장"""
+        try:
+            progress_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(progress_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'processed': list(processed_in_session),
+                    'failed': failed_companies,
+                    'last_updated': datetime.now().isoformat()
+                }, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"진행 상황 저장 실패: {e}")
 
     try:
         for i, company_name in enumerate(missing_companies, 1):
@@ -247,9 +278,11 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
                     rating = result['reputation']['jobplanet_rating']
                     logger.info(f"  → 잡플래닛 평점: {rating}/5.0 (소요: {duration:.1f}초)")
                     stats['success'] += 1
+                    processed_in_session.add(company_name)  # 성공한 회사 기록
                 elif result:
                     logger.info(f"  → 잡플래닛 정보 없음 (기본 정보 저장, 소요: {duration:.1f}초)")
                     stats['success'] += 1
+                    processed_in_session.add(company_name)  # 성공한 회사 기록
                 else:
                     logger.warning(f"  → 분석 실패")
                     stats['failed'] += 1
@@ -266,13 +299,20 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
                     'status': 'completed' if result else 'failed'
                 })
 
+                # 진행 상황 저장 (매 회사 처리 후)
+                save_progress()
+
             except Exception as e:
                 logger.warning(f"  → 분석 실패: {e}")
                 stats['failed'] += 1
                 failed_companies.append(company_name)
+                save_progress()  # 실패해도 진행 상황 저장
+
     finally:
         # 중단되더라도 브라우저 종료 보장
         analyzer.close()
+        # 최종 진행 상황 저장
+        save_progress()
 
     logger.info("\n" + "=" * 60)
     logger.info("2차 크롤링 완료 (회사정보)")
@@ -811,6 +851,18 @@ def main():
         help='crawl-companies 명령에서 한 번에 처리할 최대 회사 수 (차단 방지, 기본: 1)'
     )
 
+    parser.add_argument(
+        '--reset-progress',
+        action='store_true',
+        help='진행 상황 초기화 (이전 세션에서 처리된 회사도 다시 크롤링)'
+    )
+
+    parser.add_argument(
+        '--no-resume',
+        action='store_true',
+        help='이미 수집된 회사 건너뛰기 비활성화 (불완전한 회사도 재수집하지 않음)'
+    )
+
     args = parser.parse_args()
     
     # 디렉토리 생성
@@ -863,7 +915,16 @@ def main():
 
         elif args.command == 'crawl-companies':
             # 2차 크롤링: 회사정보만
-            run_company_crawling(settings, db, logger, max_companies=args.max_companies)
+            # --reset-progress: 진행 상황 파일 삭제
+            if args.reset_progress:
+                progress_file = Path("data/crawl_progress.json")
+                if progress_file.exists():
+                    progress_file.unlink()
+                    logger.info("진행 상황 초기화됨")
+
+            # --no-resume: 불완전한 회사도 재수집하지 않음
+            resume = not args.no_resume
+            run_company_crawling(settings, db, logger, max_companies=args.max_companies, resume=resume)
 
         elif args.command == 'crawl':
             # 전체 크롤링 (1차 + 2차)
