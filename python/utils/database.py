@@ -404,20 +404,43 @@ class Database:
         finally:
             session.close()
 
-    def get_companies_without_info(self) -> List[str]:
-        """잡플래닛 정보가 없는 회사 목록 조회"""
+    def get_companies_without_info(self, include_incomplete: bool = True) -> List[str]:
+        """잡플래닛 정보가 없거나 불완전한 회사 목록 조회
+
+        Args:
+            include_incomplete: True이면 jobplanet_rating이 NULL인 회사도 포함 (재수집 대상)
+
+        Returns:
+            수집이 필요한 회사명 목록
+        """
         session = self.get_session()
         try:
             # 채용공고에 있는 모든 회사
             all_companies = session.query(JobPosting.company_name).distinct().all()
             all_company_names = set(name[0] for name in all_companies if name[0])
 
-            # 이미 정보가 있는 회사
-            existing = session.query(Company.name).all()
-            existing_names = set(name[0] for name in existing if name[0])
+            # 완전한 정보가 있는 회사 (jobplanet_rating이 있는 경우)
+            complete = session.query(Company.name).filter(
+                Company.jobplanet_rating.isnot(None)
+            ).all()
+            complete_names = set(name[0] for name in complete if name[0])
 
-            # 차집합
-            return list(all_company_names - existing_names)
+            if include_incomplete:
+                # 불완전한 정보 회사도 재수집 (jobplanet_rating이 NULL인 경우)
+                incomplete = session.query(Company.name).filter(
+                    Company.jobplanet_rating.is_(None)
+                ).all()
+                incomplete_names = set(name[0] for name in incomplete if name[0])
+
+                # 완전한 정보가 있는 회사만 제외
+                missing = all_company_names - complete_names
+            else:
+                # 기존 동작: Company 테이블에 있는 모든 회사 제외
+                existing = session.query(Company.name).all()
+                existing_names = set(name[0] for name in existing if name[0])
+                missing = all_company_names - existing_names
+
+            return list(missing)
         finally:
             session.close()
 
