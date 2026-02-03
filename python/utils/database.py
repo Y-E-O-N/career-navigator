@@ -190,6 +190,105 @@ class MarketAnalysis(Base):
     roadmap_6months = Column(Text)  # 6개월 로드맵
 
 
+class CompanyReview(Base):
+    """회사 리뷰 테이블 (잡플래닛)"""
+    __tablename__ = 'company_reviews'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    company_name = Column(String(200), nullable=False)
+
+    # 리뷰 식별
+    source_site = Column(String(50), default='jobplanet')
+    review_id = Column(String(100))
+
+    # 작성자 정보
+    job_category = Column(String(100))
+    employment_status = Column(String(50))
+    location = Column(String(100))
+    write_date = Column(String(50))
+
+    # 평점
+    total_rating = Column(Float)
+    category_scores = Column(JSON)  # 항목별 점수
+
+    # 리뷰 내용
+    title = Column(String(300))
+    pros = Column(Text)
+    cons = Column(Text)
+    advice = Column(Text)
+
+    # 추가 정보
+    future_outlook = Column(String(200))
+    recommendation = Column(String(100))
+
+    # 메타
+    crawled_at = Column(DateTime, default=get_kst_now)
+
+
+class CompanyInterview(Base):
+    """면접 후기 테이블 (잡플래닛)"""
+    __tablename__ = 'company_interviews'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    company_name = Column(String(200), nullable=False)
+
+    # 면접 식별
+    source_site = Column(String(50), default='jobplanet')
+    interview_id = Column(String(100))
+
+    # 면접 정보
+    job_category = Column(String(100))
+    position = Column(String(100))
+    interview_date = Column(String(50))
+
+    # 면접 상세
+    difficulty = Column(String(50))
+    route = Column(String(200))
+    title = Column(String(300))
+    question = Column(Text)
+    answer = Column(Text)
+
+    # 결과
+    announcement_timing = Column(String(100))
+    result = Column(String(100))
+    experience = Column(String(100))
+
+    # 메타
+    crawled_at = Column(DateTime, default=get_kst_now)
+
+
+class CompanyBenefit(Base):
+    """복지 후기 테이블 (잡플래닛)"""
+    __tablename__ = 'company_benefits'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    company_name = Column(String(200), nullable=False)
+
+    # 복지 식별
+    source_site = Column(String(50), default='jobplanet')
+    benefit_id = Column(String(100))
+
+    # 카테고리 정보
+    category = Column(String(100))
+    category_rating = Column(Float)
+
+    # 작성자 정보
+    job_category = Column(String(100))
+    employment_status = Column(String(50))
+    location = Column(String(100))
+    employment_type = Column(String(50))
+
+    # 후기 내용
+    content = Column(Text)
+    item_scores = Column(JSON)
+
+    # 메타
+    crawled_at = Column(DateTime, default=get_kst_now)
+
+
 class Database:
     """데이터베이스 관리 클래스"""
 
@@ -441,6 +540,217 @@ class Database:
                 missing = all_company_names - existing_names
 
             return list(missing)
+        finally:
+            session.close()
+
+    def add_company_reviews(self, company_name: str, reviews: List[dict], company_id: Optional[int] = None) -> int:
+        """회사 리뷰 추가/업데이트 (잡플래닛)
+
+        Args:
+            company_name: 회사명
+            reviews: 리뷰 데이터 리스트
+            company_id: 회사 ID (선택)
+
+        Returns:
+            추가/업데이트된 리뷰 수
+        """
+        if not reviews:
+            return 0
+
+        session = self.get_session()
+        count = 0
+        try:
+            for review_data in reviews:
+                # 필드명 매핑 (크롤링 데이터 -> DB 컬럼)
+                review_id = review_data.get('review_id') or review_data.get('id')
+                job_category = review_data.get('job_category') or review_data.get('job')
+                source_site = review_data.get('source_site', 'jobplanet')
+
+                existing = None
+                if review_id:
+                    existing = session.query(CompanyReview).filter_by(
+                        source_site=source_site,
+                        review_id=str(review_id)
+                    ).first()
+
+                if existing:
+                    # 업데이트
+                    for key, value in review_data.items():
+                        if hasattr(existing, key) and value is not None:
+                            setattr(existing, key, value)
+                    existing.crawled_at = get_kst_now()
+                else:
+                    # 새로 추가
+                    review = CompanyReview(
+                        company_id=company_id,
+                        company_name=company_name,
+                        source_site=source_site,
+                        review_id=str(review_id) if review_id else None,
+                        job_category=job_category,
+                        employment_status=review_data.get('employment_status'),
+                        location=review_data.get('location'),
+                        write_date=review_data.get('write_date'),
+                        total_rating=review_data.get('total_rating'),
+                        category_scores=review_data.get('category_scores'),
+                        title=review_data.get('title'),
+                        pros=review_data.get('pros'),
+                        cons=review_data.get('cons'),
+                        advice=review_data.get('advice'),
+                        future_outlook=review_data.get('future_outlook'),
+                        recommendation=review_data.get('recommendation')
+                    )
+                    session.add(review)
+                count += 1
+
+            session.commit()
+            return count
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def add_company_interviews(self, company_name: str, interviews: List[dict], company_id: Optional[int] = None) -> int:
+        """면접 후기 추가/업데이트 (잡플래닛)
+
+        Args:
+            company_name: 회사명
+            interviews: 면접 후기 데이터 리스트
+            company_id: 회사 ID (선택)
+
+        Returns:
+            추가/업데이트된 면접 후기 수
+        """
+        if not interviews:
+            return 0
+
+        session = self.get_session()
+        count = 0
+        try:
+            for interview_data in interviews:
+                # 필드명 매핑 (크롤링 데이터 -> DB 컬럼)
+                interview_id = interview_data.get('interview_id') or interview_data.get('id')
+                job_category = interview_data.get('job_category') or interview_data.get('job')
+                interview_date = interview_data.get('interview_date') or interview_data.get('date')
+                source_site = interview_data.get('source_site', 'jobplanet')
+
+                existing = None
+                if interview_id:
+                    existing = session.query(CompanyInterview).filter_by(
+                        source_site=source_site,
+                        interview_id=str(interview_id)
+                    ).first()
+
+                if existing:
+                    # 업데이트
+                    for key, value in interview_data.items():
+                        if hasattr(existing, key) and value is not None:
+                            setattr(existing, key, value)
+                    existing.crawled_at = get_kst_now()
+                else:
+                    # 새로 추가
+                    interview = CompanyInterview(
+                        company_id=company_id,
+                        company_name=company_name,
+                        source_site=source_site,
+                        interview_id=str(interview_id) if interview_id else None,
+                        job_category=job_category,
+                        position=interview_data.get('position'),
+                        interview_date=interview_date,
+                        difficulty=interview_data.get('difficulty'),
+                        route=interview_data.get('route'),
+                        title=interview_data.get('title'),
+                        question=interview_data.get('question'),
+                        answer=interview_data.get('answer'),
+                        announcement_timing=interview_data.get('announcement_timing'),
+                        result=interview_data.get('result'),
+                        experience=interview_data.get('experience')
+                    )
+                    session.add(interview)
+                count += 1
+
+            session.commit()
+            return count
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def add_company_benefits(self, company_name: str, benefits: List[dict], company_id: Optional[int] = None) -> int:
+        """복지 후기 추가/업데이트 (잡플래닛)
+
+        Args:
+            company_name: 회사명
+            benefits: 복지 후기 데이터 리스트
+            company_id: 회사 ID (선택)
+
+        Returns:
+            추가/업데이트된 복지 후기 수
+        """
+        if not benefits:
+            return 0
+
+        session = self.get_session()
+        count = 0
+        try:
+            for benefit_data in benefits:
+                # 필드명 매핑 (profile 내부 필드 추출)
+                profile = benefit_data.get('profile', {})
+                job_category = benefit_data.get('job_category') or profile.get('job')
+                employment_status = benefit_data.get('employment_status') or profile.get('employment_status')
+                location = benefit_data.get('location') or profile.get('location')
+                employment_type = benefit_data.get('employment_type') or profile.get('employment_type')
+
+                benefit_id = benefit_data.get('benefit_id')
+                source_site = benefit_data.get('source_site', 'jobplanet')
+
+                existing = None
+                if benefit_id:
+                    existing = session.query(CompanyBenefit).filter_by(
+                        source_site=source_site,
+                        benefit_id=str(benefit_id)
+                    ).first()
+
+                if existing:
+                    # 업데이트
+                    for key, value in benefit_data.items():
+                        if hasattr(existing, key) and value is not None:
+                            setattr(existing, key, value)
+                    existing.crawled_at = get_kst_now()
+                else:
+                    # 새로 추가 (복지 후기는 benefit_id가 없는 경우가 많음)
+                    benefit = CompanyBenefit(
+                        company_id=company_id,
+                        company_name=company_name,
+                        source_site=source_site,
+                        benefit_id=str(benefit_id) if benefit_id else None,
+                        category=benefit_data.get('category'),
+                        category_rating=benefit_data.get('category_rating'),
+                        job_category=job_category,
+                        employment_status=employment_status,
+                        location=location,
+                        employment_type=employment_type,
+                        content=benefit_data.get('content'),
+                        item_scores=benefit_data.get('item_scores')
+                    )
+                    session.add(benefit)
+                count += 1
+
+            session.commit()
+            return count
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def get_company_id_by_name(self, company_name: str) -> Optional[int]:
+        """회사명으로 company_id 조회"""
+        session = self.get_session()
+        try:
+            company = session.query(Company).filter_by(name=company_name).first()
+            return company.id if company else None
         finally:
             session.close()
 
