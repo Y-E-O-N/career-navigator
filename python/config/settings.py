@@ -106,6 +106,29 @@ class SchedulerConfig:
 
 
 @dataclass
+class JobplanetConfig:
+    """잡플래닛 크롤링 설정"""
+    # 페이지 수 제한
+    review_max_pages: int = int(os.getenv("JOBPLANET_REVIEW_MAX_PAGES", "50"))
+    interview_max_pages: int = int(os.getenv("JOBPLANET_INTERVIEW_MAX_PAGES", "50"))
+    benefit_max_pages: int = int(os.getenv("JOBPLANET_BENEFIT_MAX_PAGES", "20"))
+
+    # 최대 수집 개수
+    review_max_count: int = int(os.getenv("JOBPLANET_REVIEW_MAX_COUNT", "500"))
+    interview_max_count: int = int(os.getenv("JOBPLANET_INTERVIEW_MAX_COUNT", "300"))
+
+    # 대기 시간 (초)
+    page_load_delay: float = float(os.getenv("JOBPLANET_PAGE_LOAD_DELAY", "3.0"))
+    scroll_delay: float = float(os.getenv("JOBPLANET_SCROLL_DELAY", "2.0"))
+    between_pages_delay: float = float(os.getenv("JOBPLANET_BETWEEN_PAGES_DELAY", "2.0"))
+    login_delay: float = float(os.getenv("JOBPLANET_LOGIN_DELAY", "8.0"))
+
+    # 로그인 정보
+    email: str = os.getenv("JOBPLANET_EMAIL", "")
+    password: str = os.getenv("JOBPLANET_PASSWORD", "")
+
+
+@dataclass
 class SearchKeywords:
     """검색 키워드 설정"""
     # 1. 직무/기술 키워드
@@ -113,7 +136,8 @@ class SearchKeywords:
         "데이터 분석가",
         "데이터 엔지니어",
         "AI 엔지니어",
-        "데이터 사이언티스트"
+        "데이터 사이언티스트",
+        "LLM"
     ])
 
     # 2. 연차 키워드
@@ -186,6 +210,7 @@ class Settings:
         self.analyzer = AnalyzerConfig()
         self.scheduler = SchedulerConfig()
         self.search_keywords = SearchKeywords()
+        self.jobplanet = JobplanetConfig()
         
         # 설정 파일이 있으면 로드
         if config_file and Path(config_file).exists():
@@ -216,6 +241,10 @@ class Settings:
             for key, value in config['crawler'].items():
                 if hasattr(self.crawler, key):
                     setattr(self.crawler, key, value)
+        if 'jobplanet' in config:
+            for key, value in config['jobplanet'].items():
+                if hasattr(self.jobplanet, key):
+                    setattr(self.jobplanet, key, value)
 
     def save_to_file(self, config_file: str):
         """설정을 JSON 파일로 저장"""
@@ -229,6 +258,17 @@ class Settings:
                 'request_delay': self.crawler.request_delay,
                 'max_retries': self.crawler.max_retries,
                 'max_pages_per_keyword': self.crawler.max_pages_per_keyword
+            },
+            'jobplanet': {
+                'review_max_pages': self.jobplanet.review_max_pages,
+                'interview_max_pages': self.jobplanet.interview_max_pages,
+                'benefit_max_pages': self.jobplanet.benefit_max_pages,
+                'review_max_count': self.jobplanet.review_max_count,
+                'interview_max_count': self.jobplanet.interview_max_count,
+                'page_load_delay': self.jobplanet.page_load_delay,
+                'scroll_delay': self.jobplanet.scroll_delay,
+                'between_pages_delay': self.jobplanet.between_pages_delay,
+                'login_delay': self.jobplanet.login_delay
             }
         }
         with open(config_file, 'w', encoding='utf-8') as f:
