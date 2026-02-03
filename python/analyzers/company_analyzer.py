@@ -81,21 +81,109 @@ class CompanyAnalyzer:
 
             # 로그인 페이지로 이동
             await page.get('https://www.jobplanet.co.kr/users/sign_in')
-            await asyncio.sleep(3)
+            await asyncio.sleep(3)  # 초기 로드 대기
 
-            # 이메일 입력
-            email_input = await page.select('input[type="email"], input[name="user[email]"], #user_email')
-            if email_input:
-                await email_input.clear_input()
-                await email_input.send_keys(self._jobplanet_email)
-                await asyncio.sleep(0.5)
+            # 로그인 폼이 나타날 때까지 대기 (최대 45초)
+            form_loaded = False
+            for wait_attempt in range(45):
+                page_state_js = r'''
+                    JSON.stringify({
+                        url: window.location.href,
+                        title: document.title,
+                        hasEmailInput: !!document.querySelector('input[type="email"], input[name="user[email]"], #user_email, input[placeholder*="이메일"], input[placeholder*="email"]'),
+                        hasPasswordInput: !!document.querySelector('input[type="password"]'),
+                        hasSubmitBtn: !!document.querySelector('button[type="submit"]'),
+                        hasCaptcha: !!document.querySelector('[class*="captcha"], [id*="captcha"], iframe[src*="captcha"], iframe[src*="recaptcha"], .g-recaptcha'),
+                        hasCloudflare: !!document.querySelector('#challenge-form, .cf-browser-verification, [class*="cloudflare"]'),
+                        bodyText: document.body?.innerText?.substring(0, 500) || ''
+                    })
+                '''
+                page_state = await page.evaluate(page_state_js)
+
+                # nodriver는 JSON을 자동 파싱할 수 있음 - 둘 다 처리
+                state_data = None
+                if isinstance(page_state, str):
+                    try:
+                        state_data = json.loads(page_state)
+                    except Exception as e:
+                        if wait_attempt == 0:
+                            self.logger.warning(f"  → JSON 파싱 오류: {e}")
+                elif isinstance(page_state, dict):
+                    state_data = page_state
+
+                # 디버깅: 10초마다 현재 상태 출력
+                if wait_attempt % 10 == 9:
+                    self.logger.info(f"  → 폼 상태 (attempt {wait_attempt+1}): type={type(page_state).__name__}, hasEmail={state_data.get('hasEmailInput') if state_data else 'N/A'}")
+
+                if isinstance(state_data, dict):
+                    if state_data.get('hasEmailInput') and state_data.get('hasPasswordInput'):
+                        self.logger.info(f"  → 로그인 폼 로드됨 ({wait_attempt+1}초 대기)")
+                        form_loaded = True
+                        break
+                    # Cloudflare나 캡챠 감지
+                    if state_data.get('hasCaptcha'):
+                        self.logger.warning("  → 캡챠 감지됨!")
+                        try:
+                            await page.save_screenshot('python/debug_login_captcha.png')
+                        except:
+                            pass
+                        return False
+                    if state_data.get('hasCloudflare'):
+                        self.logger.warning("  → Cloudflare 차단 감지됨!")
+                        return False
+
+                if wait_attempt % 5 == 4:
+                    self.logger.info(f"  → 로그인 폼 대기 중... ({wait_attempt+1}초)")
+                await asyncio.sleep(1)
+
+            # 디버깅용 스크린샷 저장
+            try:
+                await page.save_screenshot('python/debug_login_page.png')
+                self.logger.info("  → 로그인 페이지 스크린샷 저장: python/debug_login_page.png")
+            except Exception as ss_err:
+                self.logger.warning(f"  → 스크린샷 저장 실패: {ss_err}")
+
+            if not form_loaded:
+                self.logger.warning("  → 로그인 폼이 45초 내에 로드되지 않음")
+                self.logger.info(f"  → 최종 페이지 상태: {page_state}")
+                # 마지막 시도: 폼이 로드되었을 수 있으므로 한번 더 확인
+                if isinstance(page_state, str):
+                    try:
+                        final_state = json.loads(page_state)
+                        if isinstance(final_state, dict) and final_state.get('hasEmailInput') and final_state.get('hasPasswordInput'):
+                            self.logger.info("  → 마지막 확인에서 로그인 폼 발견됨, 계속 진행")
+                            form_loaded = True
+                    except:
+                        pass
+
+            if not form_loaded:
+                return False
+
+            # 이메일 입력 필드 찾기 (여러 번 시도)
+            email_input = None
+            for _ in range(5):
+                email_input = await page.select('input[type="email"], input[name="user[email]"], #user_email')
+                if email_input:
+                    break
+                await asyncio.sleep(1)
+
+            if not email_input:
+                self.logger.warning("  → 이메일 입력 필드를 찾을 수 없음")
+                return False
+
+            await email_input.clear_input()
+            await email_input.send_keys(self._jobplanet_email)
+            await asyncio.sleep(1)  # 입력 후 대기 (0.5초 → 1초)
 
             # 비밀번호 입력
             password_input = await page.select('input[type="password"], input[name="user[password]"], #user_password')
-            if password_input:
-                await password_input.clear_input()
-                await password_input.send_keys(self._jobplanet_password)
-                await asyncio.sleep(0.5)
+            if not password_input:
+                self.logger.warning("  → 비밀번호 입력 필드를 찾을 수 없음")
+                return False
+
+            await password_input.clear_input()
+            await password_input.send_keys(self._jobplanet_password)
+            await asyncio.sleep(1)  # 입력 후 대기 (0.5초 → 1초)
 
             # 로그인 버튼 클릭 ("이메일로 로그인" 버튼)
             login_btn_js = r'''
@@ -119,16 +207,158 @@ class CompanyAnalyzer:
             '''
             click_result = await page.evaluate(login_btn_js)
             self.logger.info(f"  → 로그인 버튼: {click_result}")
-            await asyncio.sleep(5)  # 로그인 처리 대기 5초
 
-            # 로그인 성공 확인 (로그인 페이지에서 벗어났는지)
-            current_url = await page.evaluate('window.location.href')
-            if 'sign_in' not in current_url:
-                self.logger.info("  → 잡플래닛 로그인 성공!")
+            if click_result == 'not found':
+                self.logger.warning("  → 로그인 버튼을 찾을 수 없음")
+                # 디버깅용 스크린샷
+                try:
+                    await page.save_screenshot('python/debug_login_no_btn.png')
+                except:
+                    pass
+                return False
+
+            await asyncio.sleep(8)  # 로그인 처리 대기
+
+            # 디버깅: 로그인 버튼 클릭 후 스크린샷
+            try:
+                await page.save_screenshot('python/debug_login_after_click.png')
+                self.logger.info("  → 로그인 후 스크린샷 저장: python/debug_login_after_click.png")
+            except Exception as ss_err:
+                self.logger.warning(f"  → 스크린샷 저장 실패: {ss_err}")
+
+            # 로그인 성공 여부 종합 확인
+            login_check_js = r'''
+                JSON.stringify((() => {
+                    const result = {
+                        url: window.location.href,
+                        title: document.title,
+                        hasSignIn: window.location.href.includes('sign_in'),
+                        hasLoginError: false,
+                        hasUserMenu: false,
+                        hasLogoutBtn: false,
+                        hasCaptcha: false,
+                        hasCloudflare: false,
+                        errorText: ''
+                    };
+
+                    // 캡챠 확인
+                    if (document.querySelector('[class*="captcha"], [id*="captcha"], iframe[src*="captcha"], iframe[src*="recaptcha"], .g-recaptcha, #recaptcha')) {
+                        result.hasCaptcha = true;
+                    }
+
+                    // Cloudflare 확인
+                    if (document.querySelector('#challenge-form, .cf-browser-verification, [class*="cloudflare"]') ||
+                        document.body?.innerText?.includes('Checking your browser') ||
+                        document.body?.innerText?.includes('Cloudflare')) {
+                        result.hasCloudflare = true;
+                    }
+
+                    // 로그인 오류 메시지 확인
+                    const errorMsgs = document.querySelectorAll('.error, .alert-danger, [class*="error"], [class*="invalid"], .text-red-500, [class*="warning"]');
+                    errorMsgs.forEach(el => {
+                        const text = el.innerText.toLowerCase();
+                        if (text.includes('비밀번호') || text.includes('이메일') || text.includes('password') || text.includes('email') || text.includes('실패') || text.includes('failed') || text.includes('일치') || text.includes('확인')) {
+                            result.hasLoginError = true;
+                            result.errorText = el.innerText.substring(0, 200);
+                        }
+                    });
+
+                    // 사용자 메뉴/프로필 확인 (로그인 성공 시 나타남)
+                    const userMenu = document.querySelector('.user-menu, .profile, [class*="user"], [class*="profile"], .gnb_user, .my_menu');
+                    if (userMenu) result.hasUserMenu = true;
+
+                    // 로그아웃 버튼 확인
+                    const logoutLinks = document.querySelectorAll('a[href*="sign_out"], button[onclick*="logout"], a[href*="logout"]');
+                    if (logoutLinks.length > 0) result.hasLogoutBtn = true;
+
+                    // 페이지 내 "로그인" 텍스트가 있는 버튼 확인 (있으면 아직 로그인 안 됨)
+                    const loginBtns = document.querySelectorAll('a, button');
+                    loginBtns.forEach(btn => {
+                        const text = btn.innerText.trim();
+                        if (text === '로그인' || text === '로그인하기') {
+                            result.hasLoginBtn = true;
+                        }
+                    });
+
+                    return result;
+                })())
+            '''
+
+            check_result = await page.evaluate(login_check_js)
+            if isinstance(check_result, str):
+                check = json.loads(check_result)
+
+                # dict인 경우에만 처리
+                if isinstance(check, dict):
+                    self.logger.info(f"  → 로그인 확인: URL에 sign_in={check.get('hasSignIn')}, 오류메시지={check.get('hasLoginError')}, 사용자메뉴={check.get('hasUserMenu')}, 로그아웃버튼={check.get('hasLogoutBtn')}")
+                    self.logger.info(f"  → 추가 확인: 캡챠={check.get('hasCaptcha')}, Cloudflare={check.get('hasCloudflare')}, 로그인버튼={check.get('hasLoginBtn')}")
+                    if check.get('errorText'):
+                        self.logger.warning(f"  → 에러 메시지: {check.get('errorText')}")
+
+                    # 캡챠나 Cloudflare 발견 시
+                    if check.get('hasCaptcha'):
+                        self.logger.warning("  → 캡챠 감지됨! 수동 로그인이 필요할 수 있습니다.")
+                        return False
+
+                    if check.get('hasCloudflare'):
+                        self.logger.warning("  → Cloudflare 차단 감지됨!")
+                        return False
+
+                    # 로그인 성공 조건: sign_in 페이지가 아니고, 오류 메시지 없고, (사용자 메뉴 또는 로그아웃 버튼 있음)
+                    if not check.get('hasSignIn') and not check.get('hasLoginError'):
+                        if check.get('hasUserMenu') or check.get('hasLogoutBtn'):
+                            self.logger.info("  → 잡플래닛 로그인 성공! (사용자 메뉴/로그아웃 버튼 확인)")
+                            self._logged_in = True
+                            return True
+                        elif not check.get('hasLoginBtn', False):
+                            # 로그인 버튼이 없으면 로그인 된 것으로 간주
+                            self.logger.info("  → 잡플래닛 로그인 성공! (로그인 버튼 없음)")
+                            self._logged_in = True
+                            return True
+
+                    if check.get('hasLoginError'):
+                        self.logger.warning(f"  → 잡플래닛 로그인 실패 (오류 메시지 감지): {check.get('errorText', '')}")
+                        return False
+
+                    if check.get('hasSignIn'):
+                        self.logger.warning("  → 잡플래닛 로그인 실패 (여전히 로그인 페이지)")
+                        return False
+
+            # 추가 확인: 메인 페이지로 이동하여 로그인 상태 재확인
+            await page.get('https://www.jobplanet.co.kr/')
+            await asyncio.sleep(3)
+
+            final_check_js = r'''
+                (() => {
+                    // 로그아웃 링크나 마이페이지 링크 있는지 확인
+                    const links = document.querySelectorAll('a');
+                    for (const link of links) {
+                        const href = link.href || '';
+                        const text = link.innerText || '';
+                        if (href.includes('sign_out') || href.includes('logout') ||
+                            text.includes('로그아웃') || text.includes('마이페이지') || text.includes('MY')) {
+                            return 'logged_in';
+                        }
+                    }
+                    // 로그인 버튼 있으면 로그인 안 됨
+                    for (const link of links) {
+                        const text = link.innerText.trim();
+                        if (text === '로그인' || text === '로그인하기') {
+                            return 'not_logged_in';
+                        }
+                    }
+                    return 'unknown';
+                })()
+            '''
+            final_result = await page.evaluate(final_check_js)
+            self.logger.info(f"  → 최종 로그인 상태 확인: {final_result}")
+
+            if final_result == 'logged_in':
+                self.logger.info("  → 잡플래닛 로그인 성공! (최종 확인)")
                 self._logged_in = True
                 return True
             else:
-                self.logger.warning("  → 잡플래닛 로그인 실패 (URL 확인)")
+                self.logger.warning(f"  → 잡플래닛 로그인 실패 (최종 상태: {final_result})")
                 return False
 
         except Exception as e:
@@ -139,21 +369,34 @@ class CompanyAnalyzer:
         """페이지를 500~700px씩 점진적으로 스크롤하여 하단까지 이동"""
         import random
 
-        while True:
+        max_iterations = 100  # 무한 루프 방지
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
             # 현재 스크롤 위치와 전체 높이 확인
             scroll_info = await page.evaluate('''
-                (() => {
-                    return {
-                        scrollY: window.scrollY,
-                        innerHeight: window.innerHeight,
-                        scrollHeight: document.body.scrollHeight
-                    };
-                })()
+                JSON.stringify({
+                    scrollY: window.scrollY,
+                    innerHeight: window.innerHeight,
+                    scrollHeight: document.body.scrollHeight
+                })
             ''')
 
-            current_y = scroll_info.get('scrollY', 0)
-            inner_height = scroll_info.get('innerHeight', 0)
-            scroll_height = scroll_info.get('scrollHeight', 0)
+            # scroll_info가 문자열이 아닌 경우 (ExceptionDetails 등) 종료
+            if not isinstance(scroll_info, str):
+                break
+
+            try:
+                scroll_data = json.loads(scroll_info)
+                if not isinstance(scroll_data, dict):
+                    break
+            except:
+                break
+
+            current_y = scroll_data.get('scrollY', 0)
+            inner_height = scroll_data.get('innerHeight', 0)
+            scroll_height = scroll_data.get('scrollHeight', 0)
 
             # 하단 도달 확인 (여유 10px)
             if current_y + inner_height >= scroll_height - 10:
@@ -558,7 +801,10 @@ class CompanyAnalyzer:
             company_data = []
             if isinstance(result_str, str):
                 try:
-                    company_data = json.loads(result_str)
+                    parsed = json.loads(result_str)
+                    # list인 경우에만 할당
+                    if isinstance(parsed, list):
+                        company_data = parsed
                 except:
                     pass
 
@@ -809,6 +1055,18 @@ class CompanyAnalyzer:
     async def _extract_reviews_data(self, page, info: Dict[str, Any]):
         """리뷰 탭에서 데이터 추출 (가이드 기반)"""
         try:
+            # 즉시 리뷰 섹션 존재 확인 (디버깅)
+            immediate_check_js = '''
+                JSON.stringify({
+                    viewReviewsList: !!document.getElementById('viewReviewsList'),
+                    viewReviewsListChildren: document.getElementById('viewReviewsList')?.children?.length || 0,
+                    reviewSections: document.querySelectorAll('section[id^="review_"]').length,
+                    firstReviewId: document.querySelector('section[id^="review_"]')?.id || 'none'
+                })
+            '''
+            immediate_result = await page.evaluate(immediate_check_js)
+            self.logger.info(f"    → 리뷰 탭 진입 시 상태: {immediate_result}")
+
             reviews_data = {
                 'review_count': None,
                 'recommend_rate': None,     # 기업 추천율 (%)
@@ -865,19 +1123,23 @@ class CompanyAnalyzer:
             stats_str = await page.evaluate(stats_js)
             if isinstance(stats_str, str):
                 stats = json.loads(stats_str)
-                if stats.get('review_count'):
-                    reviews_data['review_count'] = stats['review_count']
-                    info['review_count'] = stats['review_count']
-                if stats.get('recommend_rate') is not None:
-                    reviews_data['recommend_rate'] = stats['recommend_rate']
-                    info['recommend_rate'] = stats['recommend_rate']
-                if stats.get('ceo_support_rate') is not None:
-                    reviews_data['ceo_support_rate'] = stats['ceo_support_rate']
-                    info['ceo_support_rate'] = stats['ceo_support_rate']
-                if stats.get('growth_potential') is not None:
-                    reviews_data['growth_potential'] = stats['growth_potential']
-                    info['growth_potential'] = stats['growth_potential']
-                self.logger.info(f"    → 기업 추천율: {stats.get('recommend_rate')}%, CEO 지지율: {stats.get('ceo_support_rate')}%, 성장 가능성: {stats.get('growth_potential')}%")
+                # dict인 경우에만 처리 (list나 다른 타입은 건너뜀)
+                if isinstance(stats, dict):
+                    if stats.get('review_count'):
+                        reviews_data['review_count'] = stats['review_count']
+                        info['review_count'] = stats['review_count']
+                    if stats.get('recommend_rate') is not None:
+                        reviews_data['recommend_rate'] = stats['recommend_rate']
+                        info['recommend_rate'] = stats['recommend_rate']
+                    if stats.get('ceo_support_rate') is not None:
+                        reviews_data['ceo_support_rate'] = stats['ceo_support_rate']
+                        info['ceo_support_rate'] = stats['ceo_support_rate']
+                    if stats.get('growth_potential') is not None:
+                        reviews_data['growth_potential'] = stats['growth_potential']
+                        info['growth_potential'] = stats['growth_potential']
+                    self.logger.info(f"    → 기업 추천율: {stats.get('recommend_rate')}%, CEO 지지율: {stats.get('ceo_support_rate')}%, 성장 가능성: {stats.get('growth_potential')}%")
+                else:
+                    self.logger.debug(f"    → 리뷰 stats가 dict가 아님: {type(stats).__name__}")
 
             # 2. "연도별 트렌드 보기" 버튼 클릭
             trend_btn_js = r'''
@@ -914,7 +1176,9 @@ class CompanyAnalyzer:
             '''
             try:
                 years_str = await page.evaluate(years_list_js)
-                years_list = json.loads(years_str) if isinstance(years_str, str) else []
+                parsed_years = json.loads(years_str) if isinstance(years_str, str) else []
+                # list인 경우에만 사용
+                years_list = parsed_years if isinstance(parsed_years, list) else []
 
                 if years_list:
                     self.logger.info(f"    → 연도 목록: {years_list[:6]}")
@@ -975,7 +1239,8 @@ class CompanyAnalyzer:
                             stats_str = await page.evaluate(stats_js)
                             if isinstance(stats_str, str):
                                 year_stats = json.loads(stats_str)
-                                if year_stats:
+                                # dict인 경우에만 처리
+                                if isinstance(year_stats, dict) and year_stats:
                                     reviews_data['yearly_trends'][year_text] = year_stats
                                     self.logger.info(f"      → {year_text}: 총 만족도 {year_stats.get('총 만족도', '-')}")
                         except Exception as e:
@@ -1048,7 +1313,8 @@ class CompanyAnalyzer:
                 job_sat_str = await page.evaluate(job_satisfaction_js)
                 if isinstance(job_sat_str, str):
                     job_sat = json.loads(job_sat_str)
-                    if job_sat:
+                    # dict인 경우에만 처리
+                    if isinstance(job_sat, dict) and job_sat:
                         reviews_data['job_satisfaction'] = job_sat
                         info['job_satisfaction'] = job_sat
                         self.logger.info(f"    → 직군별 만족도: {len(job_sat)}개 직군")
@@ -1058,121 +1324,224 @@ class CompanyAnalyzer:
             # 8. 맞춤 기업 찾기 (차트 스크린샷 저장)
             await self._capture_company_comparison_charts(page, info)
 
-            # 9. 개별 리뷰 수집을 위해 스크롤
-            await self._scroll_to_bottom_incrementally(page)
+            # 9. 리뷰 페이지로 다시 이동 (다른 탭 클릭으로 인해 상태 변경될 수 있음)
+            try:
+                current_url_result = await page.evaluate('window.location.href')
+                current_url = current_url_result if isinstance(current_url_result, str) else ''
+                if '/reviews' not in current_url:
+                    # 리뷰 페이지가 아니면 다시 이동
+                    review_url = info.get('jobplanet_url', '').replace('/landing', '/reviews').split('?')[0]
+                    if review_url:
+                        self.logger.info(f"    → 리뷰 페이지로 재이동: {review_url}")
+                        await page.get(review_url)
+                        await asyncio.sleep(3)
+                        await self._close_popup(page)
+            except:
+                pass
+
+            # 리뷰 영역까지 천천히 스크롤 (lazy-loading 트리거)
+            self.logger.info(f"    → 리뷰 영역까지 스크롤 시작")
+            for scroll_y in range(0, 3000, 300):
+                await page.evaluate(f'window.scrollTo(0, {scroll_y})')
+                await asyncio.sleep(0.3)
+            await asyncio.sleep(2)
+
+            # 리뷰 상태 다시 확인
+            pre_extract_check_js = '''
+                JSON.stringify({
+                    url: window.location.href,
+                    viewReviewsList: !!document.getElementById('viewReviewsList'),
+                    reviewCount: document.querySelectorAll('section[id^="review_"]').length,
+                    firstReviewId: document.querySelector('section[id^="review_"]')?.id || 'none'
+                })
+            '''
+            pre_check = await page.evaluate(pre_extract_check_js)
+            self.logger.info(f"    → 리뷰 추출 전 상태: {pre_check}")
 
             # 9. 개별 리뷰 추출 (최대 50페이지)
             max_pages = 50
             all_reviews = []
-            base_url = await page.evaluate('window.location.href.split("?")[0]')
+            try:
+                base_url_result = await page.evaluate('window.location.href.split("?")[0]')
+                base_url = base_url_result if isinstance(base_url_result, str) else await page.evaluate('window.location.href')
+                if not isinstance(base_url, str):
+                    base_url = info.get('jobplanet_url', '').split('?')[0]
+            except:
+                base_url = info.get('jobplanet_url', '').split('?')[0]
 
             for page_num in range(1, max_pages + 1):
+                # 페이지 렌더링 대기
+                await asyncio.sleep(2)
+
+                # 리뷰 목록 컨테이너(#viewReviewsList) 내부에 리뷰가 로드될 때까지 대기
+                # 최대 10초간 폴링하며 대기
+                review_loaded = False
+                for wait_attempt in range(10):
+                    check_reviews_js = '''
+                        JSON.stringify((() => {
+                            const container = document.getElementById('viewReviewsList');
+                            if (!container) return { containerExists: false, reviewCount: 0, html: '' };
+                            const reviews = container.querySelectorAll('section[id^="review_"]');
+                            // 다른 셀렉터도 시도
+                            const altReviews = document.querySelectorAll('section[id^="review_"]');
+                            return {
+                                containerExists: true,
+                                reviewCount: reviews.length,
+                                altReviewCount: altReviews.length,
+                                containerChildCount: container.children.length
+                            };
+                        })())
+                    '''
+                    try:
+                        result = await page.evaluate(check_reviews_js)
+                        # nodriver는 str 또는 dict 반환 가능
+                        result_data = None
+                        if isinstance(result, str):
+                            result_data = json.loads(result)
+                        elif isinstance(result, dict):
+                            result_data = result
+
+                        if isinstance(result_data, dict):
+                            container_exists = result_data.get('containerExists', False)
+                            review_count = result_data.get('reviewCount', 0)
+                            alt_count = result_data.get('altReviewCount', 0)
+
+                            # 컨테이너 내부 또는 전역에서 리뷰 발견
+                            if container_exists and (review_count > 0 or alt_count > 0):
+                                actual_count = review_count if review_count > 0 else alt_count
+                                self.logger.info(f"    → 페이지 {page_num}: 리뷰 {actual_count}개 로드됨 ({wait_attempt+1}초 대기)")
+                                review_loaded = True
+                                break
+                            elif wait_attempt == 0:
+                                self.logger.debug(f"    → 리뷰 대기 중... (컨테이너: {container_exists}, 내부: {review_count}, 전역: {alt_count})")
+                    except Exception as e:
+                        self.logger.debug(f"    → 리뷰 확인 중 오류: {e}")
+
+                    await asyncio.sleep(1)
+
+                if not review_loaded:
+                    if page_num == 1:
+                        self.logger.info(f"    → 첫 페이지에 리뷰 로드 실패 (10초 대기 후에도 없음)")
+                        # 페이지 상태 디버깅
+                        debug_js = '''
+                            JSON.stringify({
+                                url: window.location.href,
+                                hasViewReviewsList: !!document.getElementById('viewReviewsList'),
+                                viewReviewsListHTML: document.getElementById('viewReviewsList')?.innerHTML?.substring(0, 500) || 'N/A',
+                                allSections: document.querySelectorAll('section').length,
+                                reviewSections: document.querySelectorAll('section[id^="review_"]').length
+                            })
+                        '''
+                        debug_result = await page.evaluate(debug_js)
+                        self.logger.debug(f"    → 디버그 정보: {debug_result}")
+                        break
+                    continue
+
                 reviews_js = r'''
                     JSON.stringify((() => {
                         const reviews = [];
-                        // section[id^="review_"] 형식의 리뷰 카드
+                        // 전역에서 section[id^="review_"] 찾기 (컨테이너 내부가 아닐 수도 있음)
                         const reviewSections = document.querySelectorAll('section[id^="review_"]');
 
                         for (const section of reviewSections) {
-                            const reviewId = section.id.replace('review_', '');
+                            try {
+                                const reviewId = section.id.replace('review_', '');
 
-                            // 프로필 정보 추출 (직군, 현/전직원, 지역, 작성일)
-                            const profileSpans = section.querySelectorAll('.text-body2.text-gray-400');
-                            let job = '', employmentStatus = '', location = '', writeDate = '';
-                            profileSpans.forEach((span, idx) => {
-                                const text = span.innerText.trim();
-                                if (idx === 0) job = text;
-                                else if (text.includes('직원')) employmentStatus = text;
-                                else if (text.match(/^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)/)) location = text;
-                                else if (text.match(/\d{4}\.\s*\d{2}/)) writeDate = text;
-                            });
-
-                            // 총 평점
-                            const ratingEl = section.querySelector('.text-h5.text-gray-800');
-                            const totalRating = ratingEl ? parseFloat(ratingEl.innerText.trim()) : null;
-
-                            // 항목별 평점 (승진 기회, 복지/급여, 워라밸, 사내문화, 경영진)
-                            const categoryScores = {};
-                            const scoreItems = section.querySelectorAll('#ReviewCardSide .space-y-\\[16px\\] > li, #ReviewCardSide ul > li');
-                            scoreItems.forEach(item => {
-                                const labelEl = item.querySelector('p.text-small1');
-                                const barItems = item.querySelectorAll('ul li');
-                                if (labelEl && barItems.length > 0) {
-                                    const label = labelEl.innerText.trim();
-                                    // 바 그래프에서 점수 계산 (채워진 바 개수)
-                                    let score = 0;
-                                    barItems.forEach(bar => {
-                                        const span = bar.querySelector('span[style*="width"]');
-                                        if (span) {
-                                            const width = span.style.width;
-                                            if (width === '100%') score += 1;
-                                        }
-                                    });
-                                    categoryScores[label] = score;
-                                }
-                            });
-
-                            // 제목 (h2)
-                            const h2 = section.querySelector('h2');
-                            const title = h2 ? h2.innerText.trim() : '';
-
-                            // 장점/단점/경영진 의견 추출
-                            let pros = '', cons = '', advice = '';
-                            const contentDivs = section.querySelectorAll('.whitespace-pre-wrap');
-
-                            contentDivs.forEach(div => {
-                                const label = div.querySelector('[class*="bg-blue-50"]');
-                                const labelRed = div.querySelector('[class*="bg-red-50"]');
-                                const labelGray = div.querySelector('[class*="bg-gray-50"]');
-
-                                const text = div.innerText.replace(/^(장점|단점|경영진에 바라는 점)\s*/, '').trim();
-
-                                if (label) pros = text.substring(0, 500);
-                                else if (labelRed) cons = text.substring(0, 500);
-                                else if (labelGray) advice = text.substring(0, 300);
-                            });
-
-                            // 1년 후 예상 및 기업 추천 여부 (.ReviewCardTag)
-                            let futureOutlook = '', recommendation = '';
-                            const tagSection = section.querySelector('.ReviewCardTag');
-                            if (tagSection) {
-                                const tagItems = tagSection.querySelectorAll('.flex.items-center > span.body2, span.body2.ml-0\\.5');
-                                tagItems.forEach(span => {
+                                // 프로필 정보 추출 (직군, 현/전직원, 지역, 작성일)
+                                // 모두 span.text-body2.text-gray-400 클래스
+                                const profileSpans = section.querySelectorAll('span.text-body2.text-gray-400');
+                                let job = '', employmentStatus = '', location = '', writeDate = '';
+                                profileSpans.forEach((span) => {
                                     const text = span.innerText.trim();
-                                    if (text.includes('1년 후')) {
-                                        futureOutlook = text;
-                                    } else if (text.includes('추천') || text.includes('비추천')) {
-                                        recommendation = text;
+                                    if (text.includes('직원')) {
+                                        employmentStatus = text;
+                                    } else if (text.match(/\d{4}\.\s*\d{2}/)) {
+                                        writeDate = text.replace('작성', '').trim();
+                                    } else if (text.match(/^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)/)) {
+                                        location = text;
+                                    } else if (!job && text.length > 0) {
+                                        job = text;
                                     }
                                 });
-                                // fallback: 전체 텍스트에서 추출
-                                const tagText = tagSection.innerText;
-                                if (!futureOutlook && tagText.includes('1년 후')) {
-                                    const match = tagText.match(/(1년 후[^\n|]+)/);
-                                    if (match) futureOutlook = match[1].trim();
-                                }
-                                if (!recommendation) {
-                                    if (tagText.includes('추천해요')) recommendation = '기업을 추천해요';
-                                    else if (tagText.includes('비추천')) recommendation = '기업을 비추천해요';
-                                }
-                            }
 
-                            if (title || pros || cons) {
-                                reviews.push({
-                                    id: reviewId,
-                                    job: job,
-                                    employment_status: employmentStatus,
-                                    location: location,
-                                    write_date: writeDate,
-                                    total_rating: totalRating,
-                                    category_scores: categoryScores,
-                                    title: title.substring(0, 150),
-                                    pros: pros,
-                                    cons: cons,
-                                    advice: advice,
-                                    future_outlook: futureOutlook,
-                                    recommendation: recommendation
+                                // 총 평점 (span.text-h5.text-gray-800)
+                                const ratingEl = section.querySelector('span.text-h5.text-gray-800');
+                                const totalRating = ratingEl ? parseFloat(ratingEl.innerText.trim()) : null;
+
+                                // 항목별 평점 (승진 기회, 복지/급여, 워라밸, 사내문화, 경영진)
+                                const categoryScores = {};
+                                const scoreItems = section.querySelectorAll('#ReviewCardSide li');
+                                scoreItems.forEach(item => {
+                                    const labelEl = item.querySelector('p.text-small1');
+                                    if (labelEl) {
+                                        const label = labelEl.innerText.trim();
+                                        // 바 그래프에서 점수 계산 (width: 100%인 span 개수)
+                                        const bars = item.querySelectorAll('span[style*="width"]');
+                                        let score = 0;
+                                        bars.forEach(bar => {
+                                            if (bar.style.width === '100%') score += 1;
+                                        });
+                                        if (label) categoryScores[label] = score;
+                                    }
                                 });
+
+                                // 제목 (h2)
+                                const h2 = section.querySelector('h2');
+                                const title = h2 ? h2.innerText.trim() : '';
+
+                                // 장점/단점/경영진 의견 추출 (div.whitespace-pre-wrap 내부)
+                                let pros = '', cons = '', advice = '';
+                                const contentDivs = section.querySelectorAll('div.whitespace-pre-wrap');
+
+                                contentDivs.forEach(div => {
+                                    const hasBlueLabel = div.querySelector('.bg-blue-50');
+                                    const hasRedLabel = div.querySelector('.bg-red-50');
+                                    const hasGrayLabel = div.querySelector('.bg-gray-50');
+
+                                    // 라벨 텍스트 제거하고 내용만 추출
+                                    let text = div.innerText.trim();
+                                    text = text.replace(/^(장점|단점|경영진에 바라는 점)\s*/, '').trim();
+
+                                    if (hasBlueLabel) pros = text.substring(0, 500);
+                                    else if (hasRedLabel) cons = text.substring(0, 500);
+                                    else if (hasGrayLabel) advice = text.substring(0, 300);
+                                });
+
+                                // 1년 후 예상 및 기업 추천 여부 (.ReviewCardTag)
+                                let futureOutlook = '', recommendation = '';
+                                const tagSection = section.querySelector('.ReviewCardTag');
+                                if (tagSection) {
+                                    const tagText = tagSection.innerText;
+                                    // "1년 후~" 텍스트 추출
+                                    const futureMatch = tagText.match(/(1년 후[^\n]+)/);
+                                    if (futureMatch) futureOutlook = futureMatch[1].trim();
+                                    // 추천 여부
+                                    if (tagText.includes('추천해요') && !tagText.includes('비추천')) {
+                                        recommendation = '기업을 추천해요';
+                                    } else if (tagText.includes('비추천')) {
+                                        recommendation = '기업을 비추천해요';
+                                    }
+                                }
+
+                                if (title || pros || cons) {
+                                    reviews.push({
+                                        id: reviewId,
+                                        job: job,
+                                        employment_status: employmentStatus,
+                                        location: location,
+                                        write_date: writeDate,
+                                        total_rating: totalRating,
+                                        category_scores: categoryScores,
+                                        title: title.substring(0, 150),
+                                        pros: pros,
+                                        cons: cons,
+                                        advice: advice,
+                                        future_outlook: futureOutlook,
+                                        recommendation: recommendation
+                                    });
+                                }
+                            } catch (e) {
+                                // 개별 리뷰 파싱 오류 무시
                             }
                         }
                         return reviews;
@@ -1180,18 +1549,32 @@ class CompanyAnalyzer:
                 '''
 
                 try:
-                    reviews_str = await page.evaluate(reviews_js)
-                    if isinstance(reviews_str, str):
-                        page_reviews = json.loads(reviews_str)
-                        if page_reviews:
-                            all_reviews.extend(page_reviews)
-                            self.logger.info(f"    → 페이지 {page_num}: {len(page_reviews)}개 리뷰 수집")
-                        else:
-                            self.logger.info(f"    → 페이지 {page_num}: 리뷰 없음, 수집 종료")
-                            break
+                    reviews_result = await page.evaluate(reviews_js)
+                    # nodriver는 str 또는 list 반환 가능
+                    page_reviews = None
+                    if isinstance(reviews_result, str):
+                        page_reviews = json.loads(reviews_result)
+                    elif isinstance(reviews_result, list):
+                        page_reviews = reviews_result
+
+                    # list인 경우에만 처리
+                    if isinstance(page_reviews, list) and page_reviews:
+                        all_reviews.extend(page_reviews)
+                        self.logger.info(f"    → 페이지 {page_num}: {len(page_reviews)}개 리뷰 수집")
+                    elif page_reviews is not None and not page_reviews:
+                        self.logger.info(f"    → 페이지 {page_num}: 리뷰 없음, 수집 종료")
+                        break
+                    else:
+                        # ExceptionDetails 등 오류 객체인 경우
+                        self.logger.debug(f"Page {page_num} review: JS 결과 타입 {type(reviews_result).__name__}")
+                        if page_num == 1:
+                            break  # 첫 페이지부터 실패하면 중단
+                        continue  # 이후 페이지면 다음으로 시도
                 except Exception as e:
                     self.logger.debug(f"Page {page_num} review extraction error: {e}")
-                    break
+                    if page_num == 1:
+                        break  # 첫 페이지부터 실패하면 중단
+                    continue
 
                 # 다음 페이지로 이동
                 if page_num < max_pages:
@@ -1242,7 +1625,8 @@ class CompanyAnalyzer:
                 kw_str = await page.evaluate(keywords_js)
                 if isinstance(kw_str, str):
                     kws = json.loads(kw_str)
-                    if kws:
+                    # list인 경우에만 처리
+                    if isinstance(kws, list) and kws:
                         all_keywords.extend(kws)
             except:
                 break
@@ -1413,12 +1797,14 @@ class CompanyAnalyzer:
 
             if isinstance(overall_str, str):
                 overall = json.loads(overall_str)
-                if overall.get('avgSalary'):
-                    salary_data['overall_avg'] = overall['avgSalary'] + '만원'
-                    info['salary_info'] = salary_data['overall_avg']
-                if overall.get('salaryCount'):
-                    salary_data['salary_count'] = overall['salaryCount']
-                    info['salary_count'] = overall['salaryCount']
+                # dict인 경우에만 처리
+                if isinstance(overall, dict):
+                    if overall.get('avgSalary'):
+                        salary_data['overall_avg'] = overall['avgSalary'] + '만원'
+                        info['salary_info'] = salary_data['overall_avg']
+                    if overall.get('salaryCount'):
+                        salary_data['salary_count'] = overall['salaryCount']
+                        info['salary_count'] = overall['salaryCount']
 
             # 1-1. 업계 평균 연봉 및 순위 추출
             industry_compare_js = r'''
@@ -1449,13 +1835,15 @@ class CompanyAnalyzer:
                 industry_str = await page.evaluate(industry_compare_js)
                 if isinstance(industry_str, str):
                     industry_data = json.loads(industry_str)
-                    if industry_data.get('industryAvg'):
-                        salary_data['industry_avg'] = industry_data['industryAvg']
-                        info['industry_avg_salary'] = industry_data['industryAvg']
-                    if industry_data.get('industryRank'):
-                        salary_data['industry_rank'] = industry_data['industryRank']
-                        info['industry_salary_rank'] = industry_data['industryRank']
-                        self.logger.info(f"    → 업계 비교: 평균 {industry_data.get('industryAvg')}, {industry_data.get('industryRank')}")
+                    # dict인 경우에만 처리
+                    if isinstance(industry_data, dict):
+                        if industry_data.get('industryAvg'):
+                            salary_data['industry_avg'] = industry_data['industryAvg']
+                            info['industry_avg_salary'] = industry_data['industryAvg']
+                        if industry_data.get('industryRank'):
+                            salary_data['industry_rank'] = industry_data['industryRank']
+                            info['industry_salary_rank'] = industry_data['industryRank']
+                            self.logger.info(f"    → 업계 비교: 평균 {industry_data.get('industryAvg')}, {industry_data.get('industryRank')}")
             except:
                 pass
 
@@ -1515,16 +1903,18 @@ class CompanyAnalyzer:
                 dist_str = await page.evaluate(salary_dist_js)
                 if isinstance(dist_str, str):
                     dist_data = json.loads(dist_str)
-                    if dist_data.get('responseRate'):
-                        salary_data['response_rate'] = f"{dist_data['responseRate']}%"
-                    if dist_data.get('min'):
-                        salary_data['salary_distribution'] = {
-                            'min': f"{dist_data['min']}만원",
-                            'low': f"{dist_data['low']}만원",
-                            'high': f"{dist_data['high']}만원",
-                            'max': f"{dist_data['max']}만원"
-                        }
-                        self.logger.info(f"    → 연봉 분포: {dist_data['min']}~{dist_data['max']}만원 (응답률: {dist_data.get('responseRate')}%)")
+                    # dict인 경우에만 처리
+                    if isinstance(dist_data, dict):
+                        if dist_data.get('responseRate'):
+                            salary_data['response_rate'] = f"{dist_data['responseRate']}%"
+                        if dist_data.get('min'):
+                            salary_data['salary_distribution'] = {
+                                'min': f"{dist_data['min']}만원",
+                                'low': f"{dist_data['low']}만원",
+                                'high': f"{dist_data['high']}만원",
+                                'max': f"{dist_data['max']}만원"
+                            }
+                            self.logger.info(f"    → 연봉 분포: {dist_data['min']}~{dist_data['max']}만원 (응답률: {dist_data.get('responseRate')}%)")
             except:
                 pass
 
@@ -1584,7 +1974,9 @@ class CompanyAnalyzer:
                     })())
                 '''
                 years_str = await page.evaluate(get_years_js)
-                years = json.loads(years_str) if isinstance(years_str, str) else []
+                parsed_salary_years = json.loads(years_str) if isinstance(years_str, str) else []
+                # list인 경우에만 사용
+                years = parsed_salary_years if isinstance(parsed_salary_years, list) else []
 
                 # 드롭다운 닫기 (ESC)
                 await page.evaluate('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))')
@@ -1654,7 +2046,8 @@ class CompanyAnalyzer:
                         salary_str = await page.evaluate(year_salary_js)
                         if isinstance(salary_str, str):
                             year_data = json.loads(salary_str)
-                            if year_data.get('salary'):
+                            # dict인 경우에만 처리
+                            if isinstance(year_data, dict) and year_data.get('salary'):
                                 salary_data['by_year'].append({
                                     'year': year,
                                     'salary': year_data['salary'] + '만원',
@@ -1774,30 +2167,34 @@ class CompanyAnalyzer:
 
             if isinstance(stats_str, str):
                 stats = json.loads(stats_str)
-                interview_data['count'] = stats.get('count')
-                info['interview_count'] = stats.get('count')
+                # dict인 경우에만 처리
+                if isinstance(stats, dict):
+                    interview_data['count'] = stats.get('count')
+                    info['interview_count'] = stats.get('count')
 
-                if stats.get('difficulty', {}).get('level'):
-                    interview_data['difficulty'] = stats['difficulty']['level']
-                    interview_data['difficulty_score'] = stats['difficulty'].get('score')
-                    info['interview_difficulty'] = stats['difficulty']['level']
+                    if stats.get('difficulty', {}).get('level'):
+                        interview_data['difficulty'] = stats['difficulty']['level']
+                        interview_data['difficulty_score'] = stats['difficulty'].get('score')
+                        info['interview_difficulty'] = stats['difficulty']['level']
 
-                if stats.get('routes'):
-                    interview_data['routes'] = stats['routes']
-                if stats.get('experiences'):
-                    interview_data['experiences'] = stats['experiences']
-                    # 가장 높은 비율의 경험 타입
-                    for exp in stats['experiences']:
-                        if '긍정' in exp.get('type', ''):
-                            info['interview_experience'] = '긍정적'
-                            break
-                if stats.get('results'):
-                    interview_data['results'] = stats['results']
-                    # 합격률 추출
-                    for res in stats['results']:
-                        if '합격' in res.get('result', '') and '불' not in res.get('result', ''):
-                            info['interview_success_rate'] = res.get('percent')
-                            break
+                    if stats.get('routes'):
+                        interview_data['routes'] = stats['routes']
+                    if stats.get('experiences'):
+                        interview_data['experiences'] = stats['experiences']
+                        # 가장 높은 비율의 경험 타입
+                        for exp in stats['experiences']:
+                            if isinstance(exp, dict) and '긍정' in exp.get('type', ''):
+                                info['interview_experience'] = '긍정적'
+                                break
+                    if stats.get('results'):
+                        interview_data['results'] = stats['results']
+                        # 합격률 추출
+                        for res in stats['results']:
+                            if isinstance(res, dict) and '합격' in res.get('result', '') and '불' not in res.get('result', ''):
+                                info['interview_success_rate'] = res.get('percent')
+                                break
+                else:
+                    self.logger.debug(f"    → 면접 stats가 dict가 아님: {type(stats).__name__}")
 
             # 2. 스크롤하여 개별 면접 후기 로드
             await self._scroll_to_bottom_incrementally(page)
@@ -1805,7 +2202,11 @@ class CompanyAnalyzer:
             # 3. 개별 면접 후기 수집 (최대 50페이지)
             max_pages = 50
             all_interviews = []
-            base_url = await page.evaluate('window.location.href.split("?")[0]')
+            try:
+                base_url_result = await page.evaluate('window.location.href.split("?")[0]')
+                base_url = base_url_result if isinstance(base_url_result, str) else info.get('jobplanet_url', '').replace('/reviews', '/interviews').split('?')[0]
+            except:
+                base_url = info.get('jobplanet_url', '').replace('/reviews', '/interviews').split('?')[0]
 
             for page_num in range(1, max_pages + 1):
                 interviews_js = r'''
@@ -1901,15 +2302,24 @@ class CompanyAnalyzer:
                     interviews_str = await page.evaluate(interviews_js)
                     if isinstance(interviews_str, str):
                         page_interviews = json.loads(interviews_str)
-                        if page_interviews:
+                        # list인 경우에만 처리
+                        if isinstance(page_interviews, list) and page_interviews:
                             all_interviews.extend(page_interviews)
                             self.logger.info(f"    → 페이지 {page_num}: {len(page_interviews)}개 면접 후기 수집")
-                        else:
+                        elif not page_interviews:
                             self.logger.info(f"    → 페이지 {page_num}: 면접 후기 없음, 수집 종료")
                             break
+                    else:
+                        # ExceptionDetails 등 오류 객체인 경우
+                        self.logger.debug(f"Page {page_num} interview: JS 실행 결과가 문자열이 아님 (type: {type(interviews_str).__name__})")
+                        if page_num == 1:
+                            break  # 첫 페이지부터 실패하면 중단
+                        continue  # 이후 페이지면 다음으로 시도
                 except Exception as e:
                     self.logger.debug(f"Page {page_num} interview extraction error: {e}")
-                    break
+                    if page_num == 1:
+                        break  # 첫 페이지부터 실패하면 중단
+                    continue
 
                 # 다음 페이지로 이동
                 if page_num < max_pages:
@@ -2043,23 +2453,25 @@ class CompanyAnalyzer:
 
             if isinstance(summary_str, str):
                 summary = json.loads(summary_str)
-                benefits_data['overall_rating'] = summary.get('overall_rating')
-                benefits_data['total_count'] = summary.get('total_count')
-                benefits_data['welfare_count'] = summary.get('welfare_count')
-                benefits_data['rating_distribution'] = summary.get('rating_distribution', {})
-                benefits_data['top_satisfaction'] = summary.get('top_satisfaction', [])
-                benefits_data['most_used'] = summary.get('most_used', [])
+                # dict인 경우에만 처리
+                if isinstance(summary, dict):
+                    benefits_data['overall_rating'] = summary.get('overall_rating')
+                    benefits_data['total_count'] = summary.get('total_count')
+                    benefits_data['welfare_count'] = summary.get('welfare_count')
+                    benefits_data['rating_distribution'] = summary.get('rating_distribution', {})
+                    benefits_data['top_satisfaction'] = summary.get('top_satisfaction', [])
+                    benefits_data['most_used'] = summary.get('most_used', [])
 
-                if summary.get('overall_rating'):
-                    info['benefits_rating'] = summary['overall_rating']
-                if summary.get('welfare_count'):
-                    info['welfare_count'] = summary['welfare_count']
-                if summary.get('top_satisfaction'):
-                    info['top_satisfaction_benefits'] = summary['top_satisfaction']
-                if summary.get('most_used'):
-                    info['most_used_benefits'] = summary['most_used']
+                    if summary.get('overall_rating'):
+                        info['benefits_rating'] = summary['overall_rating']
+                    if summary.get('welfare_count'):
+                        info['welfare_count'] = summary['welfare_count']
+                    if summary.get('top_satisfaction'):
+                        info['top_satisfaction_benefits'] = summary['top_satisfaction']
+                    if summary.get('most_used'):
+                        info['most_used_benefits'] = summary['most_used']
 
-                self.logger.info(f"    → 복지 요약: 평점 {summary.get('overall_rating')}, 복지 개수 {summary.get('welfare_count')}개")
+                    self.logger.info(f"    → 복지 요약: 평점 {summary.get('overall_rating')}, 복지 개수 {summary.get('welfare_count')}개")
 
             # 2. 600px 스크롤하여 복지 목록 로드
             await page.evaluate('window.scrollTo(0, 600)')
@@ -2103,13 +2515,15 @@ class CompanyAnalyzer:
             category_str = await page.evaluate(welfare_by_category_js)
             if isinstance(category_str, str):
                 category_data = json.loads(category_str)
-                benefits_data['welfare_by_category'] = category_data.get('categories', {})
-                benefits_data['welfare_list'] = category_data.get('allItems', [])
-                info['benefits'] = benefits_data['welfare_list'][:30]
-                info['benefits_by_category'] = benefits_data['welfare_by_category']
+                # dict인 경우에만 처리
+                if isinstance(category_data, dict):
+                    benefits_data['welfare_by_category'] = category_data.get('categories', {})
+                    benefits_data['welfare_list'] = category_data.get('allItems', [])
+                    info['benefits'] = benefits_data['welfare_list'][:30]
+                    info['benefits_by_category'] = benefits_data['welfare_by_category']
 
-                total_items = sum(len(items) for items in benefits_data['welfare_by_category'].values())
-                self.logger.info(f"    → 복지 목록: {len(benefits_data['welfare_by_category'])}개 카테고리, {total_items}개 항목")
+                    total_items = sum(len(items) for items in benefits_data['welfare_by_category'].values())
+                    self.logger.info(f"    → 복지 목록: {len(benefits_data['welfare_by_category'])}개 카테고리, {total_items}개 항목")
 
             # 4. 복지 후기 수집 (페이지네이션 포함) - 상세 정보 포함
             await self._scroll_to_bottom_incrementally(page)
@@ -2194,10 +2608,11 @@ class CompanyAnalyzer:
                     reviews_str = await page.evaluate(reviews_js)
                     if isinstance(reviews_str, str):
                         page_reviews = json.loads(reviews_str)
-                        if page_reviews:
+                        # list인 경우에만 처리
+                        if isinstance(page_reviews, list) and page_reviews:
                             all_reviews.extend(page_reviews)
                             self.logger.info(f"    → 복지 후기 페이지 {page_num}: {len(page_reviews)}개")
-                        else:
+                        elif not page_reviews:
                             break
                 except:
                     break
@@ -2308,12 +2723,14 @@ class CompanyAnalyzer:
             result_str = await page.evaluate(jobs_js)
             if isinstance(result_str, str):
                 data = json.loads(result_str)
-                if data.get('count') is not None:
-                    info['active_job_count'] = data['count']
-                if data.get('jobs'):
-                    info['active_jobs'] = data['jobs'][:20]
-                    info['active_job_titles'] = [j['title'] for j in data['jobs'][:10]]
-                self.logger.info(f"  → 채용 추출: {data.get('count')}개 공고, {len(data.get('jobs', []))}개 상세")
+                # dict인 경우에만 처리
+                if isinstance(data, dict):
+                    if data.get('count') is not None:
+                        info['active_job_count'] = data['count']
+                    if data.get('jobs'):
+                        info['active_jobs'] = data['jobs'][:20]
+                        info['active_job_titles'] = [j['title'] for j in data['jobs'][:10]]
+                    self.logger.info(f"  → 채용 추출: {data.get('count')}개 공고, {len(data.get('jobs', []))}개 상세")
         except Exception as e:
             self.logger.debug(f"Jobs extraction error: {e}")
 
@@ -2400,27 +2817,29 @@ class CompanyAnalyzer:
             result_str = await page.evaluate(profile_js)
             if isinstance(result_str, str):
                 data = json.loads(result_str)
-                # 기존 정보 보완 (없는 경우에만 업데이트)
-                if data.get('industry') and not info.get('industry'):
-                    info['industry'] = data['industry']
-                if data.get('company_type') and not info.get('company_type'):
-                    info['company_type'] = data['company_type']
-                if data.get('employee_count') and not info.get('employee_count'):
-                    info['employee_count'] = data['employee_count']
-                if data.get('founded_date') and not info.get('founded_date'):
-                    info['founded_date'] = data['founded_year']
-                if data.get('ceo'):
-                    info['ceo'] = data['ceo']
-                if data.get('revenue'):
-                    info['revenue'] = data['revenue']
-                if data.get('address') and not info.get('address'):
-                    info['address'] = data['address']
-                if data.get('website') and not info.get('website'):
-                    info['website'] = data['website']
-                if data.get('history'):
-                    info['history'] = data['history']
+                # dict인 경우에만 처리
+                if isinstance(data, dict):
+                    # 기존 정보 보완 (없는 경우에만 업데이트)
+                    if data.get('industry') and not info.get('industry'):
+                        info['industry'] = data['industry']
+                    if data.get('company_type') and not info.get('company_type'):
+                        info['company_type'] = data['company_type']
+                    if data.get('employee_count') and not info.get('employee_count'):
+                        info['employee_count'] = data['employee_count']
+                    if data.get('founded_date') and not info.get('founded_date'):
+                        info['founded_date'] = data['founded_year']
+                    if data.get('ceo'):
+                        info['ceo'] = data['ceo']
+                    if data.get('revenue'):
+                        info['revenue'] = data['revenue']
+                    if data.get('address') and not info.get('address'):
+                        info['address'] = data['address']
+                    if data.get('website') and not info.get('website'):
+                        info['website'] = data['website']
+                    if data.get('history'):
+                        info['history'] = data['history']
 
-                self.logger.info(f"  → 기업정보 추출: 산업 {data.get('industry')}, 사원수 {data.get('employee_count')}")
+                    self.logger.info(f"  → 기업정보 추출: 산업 {data.get('industry')}, 사원수 {data.get('employee_count')}")
 
         except Exception as e:
             self.logger.debug(f"Landing extraction error: {e}")
@@ -2589,7 +3008,8 @@ class CompanyAnalyzer:
                     qna_str = await page.evaluate(qna_js)
                     if isinstance(qna_str, str):
                         qnas = json.loads(qna_str)
-                        if qnas:
+                        # list인 경우에만 처리
+                        if isinstance(qnas, list) and qnas:
                             premium_data['categories'][category] = qnas
                             premium_data['total_qna'].extend(qnas)
                             self.logger.info(f"    → {category}: {len(qnas)}개 Q&A")
