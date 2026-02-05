@@ -50,10 +50,25 @@ class CompanyAnalyzer:
         self._browser = None  # 브라우저 인스턴스 재사용 (오류 시에만 재시작)
         self._logged_in = False  # 로그인 상태
 
-        # 잡플래닛 로그인 정보 (환경변수에서)
-        import os
-        self._jobplanet_email = os.getenv('JOBPLANET_EMAIL')
-        self._jobplanet_password = os.getenv('JOBPLANET_PASSWORD')
+        # 설정에서 값 로드
+        self.page_load_delay = settings.jobplanet.page_load_delay
+        self.scroll_delay = settings.jobplanet.scroll_delay
+        self.between_pages_delay = settings.jobplanet.between_pages_delay
+        self.login_delay = settings.jobplanet.login_delay
+        self.popup_close_delay = settings.jobplanet.popup_close_delay
+        self.tab_switch_delay = settings.jobplanet.tab_switch_delay
+        self.element_wait_delay = settings.jobplanet.element_wait_delay
+        self.headless = settings.jobplanet.headless
+
+        # 스크롤 설정
+        self.scroll_min = settings.jobplanet.scroll_min
+        self.scroll_max = settings.jobplanet.scroll_max
+        self.scroll_delay_min = settings.jobplanet.scroll_delay_min
+        self.scroll_delay_max = settings.jobplanet.scroll_delay_max
+
+        # 잡플래닛 로그인 정보 (설정에서)
+        self._jobplanet_email = settings.jobplanet.email
+        self._jobplanet_password = settings.jobplanet.password
 
     def close(self):
         """브라우저 종료"""
@@ -81,7 +96,7 @@ class CompanyAnalyzer:
 
             # 로그인 페이지로 이동
             await page.get('https://www.jobplanet.co.kr/users/sign_in')
-            await asyncio.sleep(3)  # 초기 로드 대기
+            await asyncio.sleep(self.page_load_delay)  # 초기 로드 대기
 
             # 로그인 폼이 나타날 때까지 대기 (최대 45초)
             form_loaded = False
@@ -134,7 +149,7 @@ class CompanyAnalyzer:
 
                 if wait_attempt % 5 == 4:
                     self.logger.info(f"  → 로그인 폼 대기 중... ({wait_attempt+1}초)")
-                await asyncio.sleep(1)
+                await asyncio.sleep(self.element_wait_delay)
 
             # 디버깅용 스크린샷 저장
             try:
@@ -165,7 +180,7 @@ class CompanyAnalyzer:
                 email_input = await page.select('input[type="email"], input[name="user[email]"], #user_email')
                 if email_input:
                     break
-                await asyncio.sleep(1)
+                await asyncio.sleep(self.element_wait_delay)
 
             if not email_input:
                 self.logger.warning("  → 이메일 입력 필드를 찾을 수 없음")
@@ -173,7 +188,7 @@ class CompanyAnalyzer:
 
             await email_input.clear_input()
             await email_input.send_keys(self._jobplanet_email)
-            await asyncio.sleep(1)  # 입력 후 대기 (0.5초 → 1초)
+            await asyncio.sleep(self.element_wait_delay)  # 입력 후 대기
 
             # 비밀번호 입력
             password_input = await page.select('input[type="password"], input[name="user[password]"], #user_password')
@@ -183,7 +198,7 @@ class CompanyAnalyzer:
 
             await password_input.clear_input()
             await password_input.send_keys(self._jobplanet_password)
-            await asyncio.sleep(1)  # 입력 후 대기 (0.5초 → 1초)
+            await asyncio.sleep(self.element_wait_delay)  # 입력 후 대기
 
             # 로그인 버튼 클릭 ("이메일로 로그인" 버튼)
             login_btn_js = r'''
@@ -326,7 +341,7 @@ class CompanyAnalyzer:
 
             # 추가 확인: 메인 페이지로 이동하여 로그인 상태 재확인
             await page.get('https://www.jobplanet.co.kr/')
-            await asyncio.sleep(3)
+            await asyncio.sleep(self.page_load_delay)
 
             final_check_js = r'''
                 (() => {
@@ -365,9 +380,18 @@ class CompanyAnalyzer:
             self.logger.warning(f"  → 잡플래닛 로그인 오류: {e}")
             return False
 
-    async def _scroll_to_bottom_incrementally(self, page, scroll_min=500, scroll_max=700, delay_min=0.3, delay_max=0.6):
-        """페이지를 500~700px씩 점진적으로 스크롤하여 하단까지 이동"""
+    async def _scroll_to_bottom_incrementally(self, page, scroll_min=None, scroll_max=None, delay_min=None, delay_max=None):
+        """페이지를 점진적으로 스크롤하여 하단까지 이동
+
+        설정값은 config에서 로드하며, 파라미터로 오버라이드 가능
+        """
         import random
+
+        # 설정값 사용 (파라미터가 없으면 config 값 사용)
+        scroll_min = scroll_min if scroll_min is not None else self.scroll_min
+        scroll_max = scroll_max if scroll_max is not None else self.scroll_max
+        delay_min = delay_min if delay_min is not None else self.scroll_delay_min
+        delay_max = delay_max if delay_max is not None else self.scroll_delay_max
 
         max_iterations = 100  # 무한 루프 방지
         iteration = 0
@@ -402,18 +426,18 @@ class CompanyAnalyzer:
             if current_y + inner_height >= scroll_height - 10:
                 break
 
-            # 500~700px 사이 랜덤 스크롤
+            # 랜덤 스크롤 거리
             scroll_amount = random.randint(scroll_min, scroll_max)
             new_y = current_y + scroll_amount
 
             await page.evaluate(f'window.scrollTo(0, {new_y})')
 
-            # 0.3~0.6초 랜덤 대기
+            # 랜덤 대기
             delay = random.uniform(delay_min, delay_max)
             await asyncio.sleep(delay)
 
         # 최종 하단 도달 후 잠시 대기 (콘텐츠 로드)
-        await asyncio.sleep(1)
+        await asyncio.sleep(self.element_wait_delay)
 
     def analyze_company(self, company_name: str) -> Dict[str, Any]:
         """
@@ -612,23 +636,31 @@ class CompanyAnalyzer:
         return core.strip()
 
     def _extract_korean_name(self, name: str) -> str:
-        """회사명에서 한글 부분만 추출 (검색용)"""
+        """회사명에서 한글 부분만 추출 (검색용)
+
+        예: "베이글코드(Bagelcode)" -> "베이글코드"
+            "(주)라프텔" -> "라프텔"
+            "트릴리(Trilly Inc.)" -> "트릴리"
+        """
         if not name:
             return ""
 
-        # 1. 괄호 안의 영문/영어 이름 제거: "라프텔(Laftel)" -> "라프텔"
-        #    또는 "(주)회사명" 형태에서 회사명만 추출
-        cleaned = re.sub(r'\([A-Za-z0-9\s\.\-\_]+\)', '', name)  # 영문 괄호 제거
-        cleaned = re.sub(r'\(주\)|\(유\)|㈜|주식회사', '', cleaned)  # 법인 표시 제거
+        # 1. 모든 괄호 내용 제거: "베이글코드(Bagelcode)" -> "베이글코드"
+        cleaned = re.sub(r'\([^)]*\)', '', name)  # 소괄호 제거
+        cleaned = re.sub(r'\[[^\]]*\]', '', cleaned)  # 대괄호 제거
 
-        # 2. 영문만 있는 경우 원본 사용
+        # 2. 법인 표시 제거
+        cleaned = re.sub(r'㈜|주식회사', '', cleaned)
+
+        # 3. 영문만 있는 경우 원본에서 괄호만 제거해서 사용
         if not cleaned.strip():
-            cleaned = name
+            cleaned = re.sub(r'\([^)]*\)', '', name)
+            cleaned = re.sub(r'\[[^\]]*\]', '', cleaned)
 
-        # 3. 앞뒤 공백 및 특수문자 정리
+        # 4. 앞뒤 공백 정리
         cleaned = cleaned.strip()
 
-        return cleaned
+        return cleaned if cleaned else name
 
     def _get_jobplanet_info(self, company_name: str) -> Dict[str, Any]:
         """잡플래닛에서 회사 정보 조회 (nodriver 사용) - Cloudflare 우회"""
@@ -671,8 +703,17 @@ class CompanyAnalyzer:
 
         try:
             self.rate_limiter.wait()
-            # async 함수 실행
-            result = asyncio.run(self._get_jobplanet_info_async(company_name, info))
+            # event loop 재사용 (asyncio.run()은 매번 새 loop 생성 후 닫아서 브라우저 재사용 불가)
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            result = loop.run_until_complete(self._get_jobplanet_info_async(company_name, info))
             return result
         except Exception as e:
             self.logger.error(f"Jobplanet search failed: {e}")
@@ -684,6 +725,9 @@ class CompanyAnalyzer:
         import json
         from urllib.parse import quote
 
+        # 회사명 저장 (DB 저장 시 사용)
+        info['company_name'] = company_name
+
         # 한글 회사명만 추출하여 검색
         search_name = self._extract_korean_name(company_name)
         # 기업 전용 검색 URL 사용
@@ -694,21 +738,21 @@ class CompanyAnalyzer:
         try:
             # 브라우저 재사용 (없거나 오류로 닫힌 경우에만 새로 시작)
             if not self._browser:
-                self._browser = await nodriver.start(headless=False)
+                self._browser = await nodriver.start(headless=self.headless)
                 self.logger.info("  → 새 브라우저 시작")
                 self._logged_in = False
 
                 # 잡플래닛 로그인
                 temp_page = await self._browser.get('about:blank')
                 await self._login_jobplanet(temp_page)
-                await asyncio.sleep(1)
+                await asyncio.sleep(self.element_wait_delay)
 
             # 1. 검색 페이지로 이동
             self.logger.info(f"  → 잡플래닛 검색: {search_name}" + (f" (원본: {company_name})" if search_name != company_name else ""))
             page = await self._browser.get(search_url)
 
             # 페이지 로드 대기
-            await asyncio.sleep(3)
+            await asyncio.sleep(self.page_load_delay)
 
             # 페이지 타이틀 확인 (Cloudflare 차단 여부)
             title = await page.evaluate('document.title')
@@ -718,7 +762,7 @@ class CompanyAnalyzer:
 
             # 스크롤하여 검색 결과 로드
             await page.evaluate('window.scrollTo(0, 600)')
-            await asyncio.sleep(2)
+            await asyncio.sleep(self.scroll_delay)
 
             # 2. 검색 결과에서 회사 찾기
             # h4 태그에서 회사명 추출 (JSON.stringify로 직렬화)
@@ -860,38 +904,41 @@ class CompanyAnalyzer:
                 return info
 
             # 4. 검색 결과에서 기본 정보 추출
-            company_id = matched_company['id']
+            jobplanet_company_id = matched_company['id']  # 잡플래닛 회사 ID (URL 숫자)
+            info['jobplanet_id'] = str(jobplanet_company_id)
             info['jobplanet_rating'] = matched_company.get('rating')
             info['industry'] = matched_company.get('industry')
             info['location'] = matched_company.get('location')
             info['founded_date'] = matched_company.get('foundedYear')
             info['employee_count'] = matched_company.get('employeeCount')
 
-            base_url = f"https://www.jobplanet.co.kr/companies/{company_id}"
+            base_url = f"https://www.jobplanet.co.kr/companies/{jobplanet_company_id}"
             info['jobplanet_url'] = base_url
 
             # 4-1. 기본 정보 즉시 저장 (companies 테이블) → db_company_id 획득
+            # 주의: jobplanet_rating은 모든 탭 처리 후 저장 (중간 중단 시 재수집 가능하도록)
             try:
                 basic_company_data = {
                     'name': company_name,
                     'industry': info.get('industry'),
                     'location': info.get('location'),
-                    'jobplanet_rating': info.get('jobplanet_rating'),
+                    'jobplanet_id': info.get('jobplanet_id'),  # 잡플래닛 회사 ID
+                    'jobplanet_rating': None,  # 모든 탭 처리 완료 후 업데이트
                     'jobplanet_url': info.get('jobplanet_url'),
                 }
                 self.db.add_company(basic_company_data)
                 db_company_id = self.db.get_company_id_by_name(company_name)
                 info['db_company_id'] = db_company_id
-                self.logger.info(f"  → 기본 정보 DB 저장 완료 (company_id: {db_company_id})")
+                self.logger.info(f"  → 기본 정보 DB 저장 완료 (company_id: {db_company_id}, rating은 완료 후 저장)")
             except Exception as e:
                 self.logger.warning(f"  → 기본 정보 DB 저장 실패: {e}")
                 info['db_company_id'] = None
 
             # 5. 회사 상세 페이지 방문하여 추가 정보 수집
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
             company_name_encoded = matched_company.get('name', '')
             await page.get(f"{base_url}/reviews/{company_name_encoded}")
-            await asyncio.sleep(3)
+            await asyncio.sleep(self.page_load_delay)
 
             # 팝업 닫기 (여러 방법 시도)
             try:
@@ -944,7 +991,7 @@ class CompanyAnalyzer:
                 '''
                 result = await page.evaluate(close_popup_js)
                 self.logger.info(f"  → 팝업 처리: {result}")
-                await asyncio.sleep(2)
+                await asyncio.sleep(self.scroll_delay)
 
                 # 추가로 팝업이 여전히 있는지 확인하고 다시 시도
                 check_popup_js = r'''
@@ -957,7 +1004,7 @@ class CompanyAnalyzer:
                 if 'exists' in check_result:
                     # 한번 더 ESC 시도
                     await page.evaluate('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 27 }))')
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(self.popup_close_delay)
 
             except Exception as e:
                 self.logger.debug(f"Popup close error: {e}")
@@ -980,18 +1027,18 @@ class CompanyAnalyzer:
                     tab_url = f"{base_url}/{tab_path}"
                     self.logger.info(f"  → {tab_name} 페이지 이동: {tab_url}")
                     await page.get(tab_url)
-                    await asyncio.sleep(3)  # 페이지 로드 후 동적 콘텐츠 대기 (3초)
+                    await asyncio.sleep(self.tab_switch_delay)  # 페이지 로드 후 동적 콘텐츠 대기
 
                     # 팝업 닫기 (모든 페이지에서 항상 실행)
                     await self._close_popup(page)
 
                     # 스크롤하여 콘텐츠 로드
                     await page.evaluate('window.scrollTo(0, 400)')
-                    await asyncio.sleep(2)  # 스크롤 후 추가 대기 (2초)
+                    await asyncio.sleep(self.scroll_delay)  # 스크롤 후 추가 대기
 
                     # 추가 스크롤로 더 많은 콘텐츠 로드
                     await page.evaluate('window.scrollTo(0, 800)')
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(self.element_wait_delay)
 
                     # 탭별 HTML 전문 및 텍스트 수집 (디버깅용)
                     try:
@@ -1057,6 +1104,20 @@ class CompanyAnalyzer:
                 else:
                     info['overall_sentiment'] = 'very_negative'
 
+            # 7. 모든 탭 처리 완료 후 jobplanet_rating 업데이트 (중간 중단 시 재수집 가능하도록)
+            if info.get('db_company_id') and info.get('jobplanet_rating'):
+                try:
+                    session = self.db.get_session()
+                    from utils.database import Company
+                    company = session.query(Company).filter(Company.id == info['db_company_id']).first()
+                    if company:
+                        company.jobplanet_rating = info['jobplanet_rating']
+                        session.commit()
+                        self.logger.info(f"  → 분석 완료: jobplanet_rating({info['jobplanet_rating']}) DB 업데이트")
+                    session.close()
+                except Exception as e:
+                    self.logger.warning(f"  → jobplanet_rating 업데이트 실패: {e}")
+
             self.logger.info(f"  → 잡플래닛 정보 수집 완료: 평점 {info.get('jobplanet_rating')}, 리뷰 {info.get('review_count')}건")
 
         except Exception as e:
@@ -1095,7 +1156,7 @@ class CompanyAnalyzer:
         try:
             result = await page.evaluate(popup_js)
             if 'clicked' in result:
-                await asyncio.sleep(1)
+                await asyncio.sleep(self.popup_close_delay)
                 return True
         except:
             pass
@@ -1205,7 +1266,7 @@ class CompanyAnalyzer:
             '''
             clicked = await page.evaluate(trend_btn_js)
             if clicked:
-                await asyncio.sleep(2)
+                await asyncio.sleep(self.scroll_delay)
                 self.logger.info("    → 연도별 트렌드 버튼 클릭")
 
             # 3. 연도별 통계 수집 (전체, 2026, 2025, ...)
@@ -1252,7 +1313,7 @@ class CompanyAnalyzer:
                             if not clicked:
                                 continue
 
-                            await asyncio.sleep(1.5)  # 데이터 로드 대기
+                            await asyncio.sleep(self.element_wait_delay + 0.5)  # 데이터 로드 대기
 
                             # 현재 연도의 만족도 통계 추출 (점수 + 비율)
                             stats_js = r'''
@@ -1313,7 +1374,7 @@ class CompanyAnalyzer:
 
             # 4. 스크롤하여 키워드 섹션 로드
             await page.evaluate('window.scrollTo(0, 1000)')
-            await asyncio.sleep(2)
+            await asyncio.sleep(self.scroll_delay)
 
             # 5. 장점 키워드 수집 (페이지네이션 포함)
             pros_keywords = await self._collect_keywords(page, 'pros')
@@ -1330,7 +1391,7 @@ class CompanyAnalyzer:
                 })()
             '''
             await page.evaluate(cons_tab_js)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             cons_keywords = await self._collect_keywords(page, 'cons')
             reviews_data['cons_keywords'] = cons_keywords
@@ -1383,7 +1444,7 @@ class CompanyAnalyzer:
                     if review_url:
                         self.logger.info(f"    → 리뷰 페이지로 재이동: {review_url}")
                         await page.get(review_url)
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(self.page_load_delay)
                         await self._close_popup(page)
             except:
                 pass
@@ -1392,8 +1453,8 @@ class CompanyAnalyzer:
             self.logger.info(f"    → 리뷰 영역까지 스크롤 시작")
             for scroll_y in range(0, 3000, 300):
                 await page.evaluate(f'window.scrollTo(0, {scroll_y})')
-                await asyncio.sleep(0.3)
-            await asyncio.sleep(2)
+                await asyncio.sleep(self.scroll_delay * 0.15)  # 짧은 스크롤 딜레이
+            await asyncio.sleep(self.scroll_delay)
 
             # 리뷰 상태 다시 확인
             pre_extract_check_js = '''
@@ -1410,7 +1471,9 @@ class CompanyAnalyzer:
             # 9. 개별 리뷰 추출 (설정에서 페이지 수 가져옴)
             max_pages = settings.jobplanet.review_max_pages
             max_reviews = settings.jobplanet.review_max_count
+            total_review_count = reviews_data.get('review_count') or info.get('review_count')  # 총 리뷰 수
             all_reviews = []
+            collected_ids = set()  # 중복 방지용 ID 추적
             try:
                 base_url_result = await page.evaluate('window.location.href.split("?")[0]')
                 base_url = base_url_result if isinstance(base_url_result, str) else await page.evaluate('window.location.href')
@@ -1421,7 +1484,7 @@ class CompanyAnalyzer:
 
             for page_num in range(1, max_pages + 1):
                 # 페이지 렌더링 대기
-                await asyncio.sleep(2)
+                await asyncio.sleep(self.scroll_delay)
 
                 # 리뷰 목록 컨테이너(#viewReviewsList) 내부에 리뷰가 로드될 때까지 대기
                 # 최대 10초간 폴링하며 대기
@@ -1467,7 +1530,7 @@ class CompanyAnalyzer:
                     except Exception as e:
                         self.logger.debug(f"    → 리뷰 확인 중 오류: {e}")
 
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(self.element_wait_delay)
 
                 if not review_loaded:
                     if page_num == 1:
@@ -1609,8 +1672,26 @@ class CompanyAnalyzer:
 
                     # list인 경우에만 처리
                     if isinstance(page_reviews, list) and page_reviews:
-                        all_reviews.extend(page_reviews)
-                        self.logger.info(f"    → 페이지 {page_num}: {len(page_reviews)}개 리뷰 수집")
+                        # 중복 제거: 이미 수집한 리뷰 ID 제외
+                        new_reviews = []
+                        for review in page_reviews:
+                            review_id = review.get('id') or review.get('review_id')
+                            if review_id and review_id not in collected_ids:
+                                collected_ids.add(review_id)
+                                new_reviews.append(review)
+                            elif not review_id:
+                                # ID가 없는 경우 내용으로 중복 체크
+                                review_key = f"{review.get('job', '')}-{review.get('date', '')}-{review.get('rating', '')}"
+                                if review_key not in collected_ids:
+                                    collected_ids.add(review_key)
+                                    new_reviews.append(review)
+
+                        if new_reviews:
+                            all_reviews.extend(new_reviews)
+                            self.logger.info(f"    → 페이지 {page_num}: {len(new_reviews)}개 리뷰 수집 (중복 {len(page_reviews) - len(new_reviews)}개 제외)")
+                        else:
+                            self.logger.info(f"    → 페이지 {page_num}: 모든 리뷰가 중복, 수집 종료")
+                            break
                     elif page_reviews is not None and not page_reviews:
                         self.logger.info(f"    → 페이지 {page_num}: 리뷰 없음, 수집 종료")
                         break
@@ -1626,20 +1707,26 @@ class CompanyAnalyzer:
                         break  # 첫 페이지부터 실패하면 중단
                     continue
 
+                # 총 리뷰 수 도달 체크
+                if total_review_count and len(all_reviews) >= total_review_count:
+                    self.logger.info(f"    → 총 리뷰 수({total_review_count}개) 도달, 수집 종료")
+                    break
+
+                # 최대 수집 개수 체크
+                if len(all_reviews) >= max_reviews:
+                    self.logger.info(f"    → 설정된 최대 리뷰 수({max_reviews}개) 도달, 수집 종료")
+                    break
+
                 # 다음 페이지로 이동
                 if page_num < max_pages:
                     next_url = f"{base_url}?page={page_num + 1}"
                     try:
                         await page.get(next_url)
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(self.page_load_delay)
                         await self._close_popup(page)
                         await self._scroll_to_bottom_incrementally(page)
                     except:
                         break
-
-                if len(all_reviews) >= max_reviews:
-                    self.logger.info(f"    → {max_reviews}개 리뷰 도달, 수집 종료")
-                    break
 
             reviews_data['reviews'] = all_reviews
             info['reviews'] = all_reviews
@@ -1698,7 +1785,7 @@ class CompanyAnalyzer:
             clicked = await page.evaluate(next_btn_js)
             if not clicked:
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(self.element_wait_delay * 0.5)  # 짧은 대기
 
         # 중복 제거
         return list(dict.fromkeys(all_keywords))
@@ -1730,7 +1817,7 @@ class CompanyAnalyzer:
                 self.logger.info("    → 맞춤 기업 찾기 탭 없음, 스킵")
                 return
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(self.scroll_delay)
             self.logger.info("    → 맞춤 기업 찾기 탭 클릭")
 
             # 축 옵션 목록
@@ -1769,7 +1856,7 @@ class CompanyAnalyzer:
                                 }})()
                             '''
                             await page.evaluate(change_selects_js)
-                            await asyncio.sleep(0.5)  # 차트 업데이트 대기
+                            await asyncio.sleep(self.element_wait_delay * 0.5)  # 차트 업데이트 대기
 
                             # 스크린샷 파일명
                             filename = f"chart_x{x_name}_y{y_name}_s{size_name}.png"
@@ -1798,7 +1885,7 @@ class CompanyAnalyzer:
         """연봉 탭에서 데이터 추출 (가이드 기반)"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             # 1. 전체 직종 평균 연봉 추출
             overall_salary_js = r'''
@@ -2007,7 +2094,7 @@ class CompanyAnalyzer:
                     })()
                 '''
                 await page.evaluate(open_dropdown_js)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self.element_wait_delay * 0.5)
 
                 # 년차 목록 가져오기
                 get_years_js = r'''
@@ -2030,7 +2117,7 @@ class CompanyAnalyzer:
 
                 # 드롭다운 닫기 (ESC)
                 await page.evaluate('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))')
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(self.element_wait_delay * 0.3)
 
                 # 3. 각 년차별 연봉 정보 수집
                 for year in years[:15]:  # 최대 15년차까지
@@ -2051,7 +2138,7 @@ class CompanyAnalyzer:
                             }})()
                         '''
                         await page.evaluate(select_year_js)
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(self.element_wait_delay * 0.3)
 
                         click_year_js = f'''
                             (() => {{
@@ -2066,7 +2153,7 @@ class CompanyAnalyzer:
                             }})()
                         '''
                         await page.evaluate(click_year_js)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(self.element_wait_delay * 0.5)
 
                         # 연봉 정보 추출
                         year_salary_js = r'''
@@ -2116,6 +2203,16 @@ class CompanyAnalyzer:
             except Exception as e:
                 self.logger.debug(f"Year-by-year salary error: {e}")
 
+            # 연봉 정보 DB 저장
+            if salary_data.get('overall_avg') or salary_data.get('by_year'):
+                try:
+                    db_company_id = info.get('db_company_id')
+                    company_name = info.get('company_name') or info.get('name', '')
+                    saved_count = self.db.add_company_salaries(company_name, salary_data, db_company_id)
+                    self.logger.info(f"    → 연봉 정보 DB 저장: {saved_count}건")
+                except Exception as e:
+                    self.logger.warning(f"    → 연봉 정보 DB 저장 실패: {e}")
+
         except Exception as e:
             self.logger.debug(f"Salary extraction error: {e}")
 
@@ -2123,7 +2220,7 @@ class CompanyAnalyzer:
         """면접 탭에서 데이터 추출 (가이드 기반)"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             # 1. 면접 통계 요약 추출 (난이도, 경로, 경험, 결과)
             stats_js = r'''
@@ -2252,7 +2349,9 @@ class CompanyAnalyzer:
             # 3. 개별 면접 후기 수집 (설정에서 페이지 수 가져옴)
             max_pages = settings.jobplanet.interview_max_pages
             max_interviews = settings.jobplanet.interview_max_count
+            total_interview_count = interview_data.get('count')  # 총 면접 후기 수
             all_interviews = []
+            collected_ids = set()  # 중복 방지용 ID 추적
             try:
                 base_url_result = await page.evaluate('window.location.href.split("?")[0]')
                 base_url = base_url_result if isinstance(base_url_result, str) else info.get('jobplanet_url', '').replace('/reviews', '/interviews').split('?')[0]
@@ -2355,8 +2454,26 @@ class CompanyAnalyzer:
                         page_interviews = json.loads(interviews_str)
                         # list인 경우에만 처리
                         if isinstance(page_interviews, list) and page_interviews:
-                            all_interviews.extend(page_interviews)
-                            self.logger.info(f"    → 페이지 {page_num}: {len(page_interviews)}개 면접 후기 수집")
+                            # 중복 제거: 이미 수집한 면접 ID 제외
+                            new_interviews = []
+                            for interview in page_interviews:
+                                interview_id = interview.get('id') or interview.get('interview_id')
+                                if interview_id and interview_id not in collected_ids:
+                                    collected_ids.add(interview_id)
+                                    new_interviews.append(interview)
+                                elif not interview_id:
+                                    # ID가 없는 경우 내용으로 중복 체크
+                                    interview_key = f"{interview.get('job', '')}-{interview.get('date', '')}-{interview.get('result', '')}"
+                                    if interview_key not in collected_ids:
+                                        collected_ids.add(interview_key)
+                                        new_interviews.append(interview)
+
+                            if new_interviews:
+                                all_interviews.extend(new_interviews)
+                                self.logger.info(f"    → 페이지 {page_num}: {len(new_interviews)}개 면접 후기 수집 (중복 {len(page_interviews) - len(new_interviews)}개 제외)")
+                            else:
+                                self.logger.info(f"    → 페이지 {page_num}: 모든 면접 후기가 중복, 수집 종료")
+                                break
                         elif not page_interviews:
                             self.logger.info(f"    → 페이지 {page_num}: 면접 후기 없음, 수집 종료")
                             break
@@ -2372,20 +2489,26 @@ class CompanyAnalyzer:
                         break  # 첫 페이지부터 실패하면 중단
                     continue
 
+                # 총 면접 후기 수 도달 체크
+                if total_interview_count and len(all_interviews) >= total_interview_count:
+                    self.logger.info(f"    → 총 면접 후기 수({total_interview_count}개) 도달, 수집 종료")
+                    break
+
+                # 최대 수집 개수 체크
+                if len(all_interviews) >= max_interviews:
+                    self.logger.info(f"    → 설정된 최대 면접 후기 수({max_interviews}개) 도달, 수집 종료")
+                    break
+
                 # 다음 페이지로 이동
                 if page_num < max_pages:
                     next_url = f"{base_url}?page={page_num + 1}"
                     try:
                         await page.get(next_url)
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(self.page_load_delay)
                         await self._close_popup(page)
                         await self._scroll_to_bottom_incrementally(page)
                     except:
                         break
-
-                if len(all_interviews) >= max_interviews:
-                    self.logger.info(f"    → {max_interviews}개 면접 후기 도달, 수집 종료")
-                    break
 
             interview_data['interviews'] = all_interviews
             info['interviews'] = all_interviews
@@ -2405,7 +2528,7 @@ class CompanyAnalyzer:
         """복지 탭에서 데이터 추출 (가이드 기반 - 완전 버전)"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             benefits_data = {
                 'overall_rating': None,
@@ -2526,7 +2649,7 @@ class CompanyAnalyzer:
 
             # 2. 600px 스크롤하여 복지 목록 로드
             await page.evaluate('window.scrollTo(0, 600)')
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             # 3. 회사 복지 목록 카테고리별 수집 (.welfare-provision)
             welfare_by_category_js = r'''
@@ -2581,6 +2704,7 @@ class CompanyAnalyzer:
 
             max_pages = settings.jobplanet.benefit_max_pages
             all_reviews = []
+            collected_keys = set()  # 중복 방지용 키 추적
             base_url = await page.evaluate('window.location.href.split("?")[0]')
 
             for page_num in range(1, max_pages + 1):
@@ -2661,9 +2785,23 @@ class CompanyAnalyzer:
                         page_reviews = json.loads(reviews_str)
                         # list인 경우에만 처리
                         if isinstance(page_reviews, list) and page_reviews:
-                            all_reviews.extend(page_reviews)
-                            self.logger.info(f"    → 복지 후기 페이지 {page_num}: {len(page_reviews)}개")
+                            # 중복 제거: 내용 기반으로 체크
+                            new_reviews = []
+                            for review in page_reviews:
+                                profile = review.get('profile', {})
+                                review_key = f"{review.get('category', '')}-{profile.get('job', '')}-{review.get('content', '')[:50]}"
+                                if review_key not in collected_keys:
+                                    collected_keys.add(review_key)
+                                    new_reviews.append(review)
+
+                            if new_reviews:
+                                all_reviews.extend(new_reviews)
+                                self.logger.info(f"    → 복지 후기 페이지 {page_num}: {len(new_reviews)}개 (중복 {len(page_reviews) - len(new_reviews)}개 제외)")
+                            else:
+                                self.logger.info(f"    → 복지 후기 페이지 {page_num}: 모든 복지 후기가 중복, 수집 종료")
+                                break
                         elif not page_reviews:
+                            self.logger.info(f"    → 복지 후기 페이지 {page_num}: 복지 후기 없음, 수집 종료")
                             break
                 except:
                     break
@@ -2691,7 +2829,7 @@ class CompanyAnalyzer:
                     clicked = await page.evaluate(next_page_js)
                     if not clicked:
                         break
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(self.page_load_delay)
                     await self._close_popup(page)
                     await self._scroll_to_bottom_incrementally(page)
 
@@ -2711,7 +2849,7 @@ class CompanyAnalyzer:
         """채용 탭에서 데이터 추출"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             # 스크롤하여 채용공고 로드
             await self._scroll_to_bottom_incrementally(page)
@@ -2789,7 +2927,7 @@ class CompanyAnalyzer:
         """랜딩 페이지에서 기업 정보 추출"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.element_wait_delay)
 
             # 기업 정보 섹션 (#profile)
             profile_js = r'''
@@ -2899,7 +3037,7 @@ class CompanyAnalyzer:
         """프리미엄 리뷰 페이지에서 Q&A 추출"""
         try:
             await self._close_popup(page)
-            await asyncio.sleep(3)
+            await asyncio.sleep(self.page_load_delay)
 
             premium_data = {
                 'categories': {},
@@ -2929,7 +3067,7 @@ class CompanyAnalyzer:
                     if not clicked:
                         continue
 
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(self.element_wait_delay)
                     await self._close_popup(page)
 
                     # 카테고리별 총 문항 수 추출: "OO의 프리미엄 리뷰 (총 10문항)"
@@ -2966,7 +3104,7 @@ class CompanyAnalyzer:
                         clicked = await page.evaluate(more_btn_js)
                         if not clicked:
                             break
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(self.element_wait_delay * 0.3)
 
                     # Q&A 수집 (답변 선택지 비율, 연차별 데이터, 기타 의견 포함)
                     qna_js = r'''
