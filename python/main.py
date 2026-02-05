@@ -7,6 +7,7 @@ Job Market Analyzer - 메인 실행 스크립트
     # 크롤링 (분리된 플로우)
     python main.py crawl-jobs         # 1차 크롤링: 채용공고 수집 (신규/기존/삭제 추적)
     python main.py crawl-companies    # 2차 크롤링: 회사정보 수집 (잡플래닛)
+    python main.py crawl-news         # 3차 크롤링: 뉴스 기사 수집 (연합뉴스)
     python main.py crawl              # 전체 크롤링 (1차 + 2차)
 
     # 분석 및 리포트
@@ -221,9 +222,11 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
     analyzer = CompanyAnalyzer(db)
 
     # 정보가 없거나 불완전한 회사 목록 조회 (resume 모드에 따라)
+    # DB 기준: jobplanet_url이 없거나 jobplanet_rating이 없는 회사 포함
     all_missing = db.get_companies_without_info(include_incomplete=resume)
 
     # 진행 상황 파일 로드 (세션 내 중복 방지)
+    # 주의: DB에서 불완전하다고 판단된 회사는 진행 상황 파일에 있어도 재시도
     progress_file = Path("data/crawl_progress.json")
     processed_in_session = set()
 
@@ -231,24 +234,33 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
         try:
             with open(progress_file, 'r', encoding='utf-8') as f:
                 progress_data = json.load(f)
-                processed_in_session = set(progress_data.get('processed', []))
-                logger.info(f"이전 세션에서 처리된 회사: {len(processed_in_session)}개 (건너뜀)")
+                all_processed = set(progress_data.get('processed', []))
+                # DB에서 불완전한 회사는 진행 상황 파일에서 제외 (재시도 대상)
+                processed_in_session = all_processed - set(all_missing)
+                skipped_count = len(all_processed) - len(all_processed & set(all_missing))
+                retry_count = len(all_processed & set(all_missing))
+                if retry_count > 0:
+                    logger.info(f"이전 세션: {len(all_processed)}개 중 {retry_count}개 재시도 (불완전), {skipped_count}개 건너뜀")
+                elif skipped_count > 0:
+                    logger.info(f"이전 세션에서 처리된 회사: {skipped_count}개 (건너뜀)")
         except Exception as e:
             logger.warning(f"진행 상황 파일 로드 실패: {e}")
 
-    # 이미 처리된 회사 제외
+    # 이미 완전히 처리된 회사만 제외 (불완전한 회사는 재시도)
     all_missing = [c for c in all_missing if c not in processed_in_session]
 
     # 한 번에 처리할 회사 수 제한 (차단 방지)
     missing_companies = all_missing[:max_companies]
 
-    logger.info(f"수집 필요 회사: {len(all_missing)}개 (이번 처리: {len(missing_companies)}개)")
+    total_target = len(all_missing)
+    batch_size = len(missing_companies)
+    logger.info(f"전체 대상: {total_target}개 | 이번 배치: {batch_size}개")
 
     if not missing_companies:
         logger.info("모든 회사 정보가 이미 수집되어 있습니다.")
         return {'total': 0, 'success': 0, 'failed': 0, 'remaining': 0}
 
-    stats = {'total': len(missing_companies), 'success': 0, 'failed': 0, 'remaining': len(all_missing) - len(missing_companies)}
+    stats = {'total': batch_size, 'success': 0, 'failed': 0, 'remaining': total_target - batch_size}
     failed_companies = []
 
     def save_progress():
@@ -269,7 +281,7 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
             start_time = time.time()
 
             try:
-                logger.info(f"\n[{i}/{len(missing_companies)}] {company_name} 분석 중...")
+                logger.info(f"\n[{i}/{batch_size}] (전체 {total_target}개 중 {i}번째) {company_name} 분석 중...")
                 result = analyzer.analyze_company(company_name)
 
                 duration = time.time() - start_time
@@ -324,6 +336,93 @@ def run_company_crawling(settings: Settings, db: Database, logger, max_companies
 
     if failed_companies:
         logger.info(f"실패한 회사: {failed_companies[:10]}{'...' if len(failed_companies) > 10 else ''}")
+
+    return stats
+
+
+def run_news_crawling(settings: Settings, db: Database, logger, max_companies: int = 10, only_no_news: bool = False, since_date: str = None) -> dict:
+    """
+    3차 크롤링: 뉴스 기사 수집 (연합뉴스)
+
+    1차 크롤링(채용공고)으로 수집된 회사들의 뉴스 기사를 연합뉴스에서 검색하여 수집합니다.
+
+    Args:
+        max_companies: 한 번에 처리할 최대 회사 수
+        only_no_news: True이면 뉴스가 0건인 회사만 크롤링 (재시도용)
+        since_date: 특정 날짜 이후의 기사만 수집 (YYYY-MM-DD 형식)
+
+    Returns:
+        dict: 크롤링 결과 통계
+    """
+    import time
+    from crawlers.news_crawler import NewsCrawler
+
+    logger.info("=" * 60)
+    logger.info("3차 크롤링: 뉴스 기사 수집 시작 (연합뉴스)")
+    if only_no_news:
+        logger.info("모드: 뉴스 0건인 회사만 재시도")
+    if since_date:
+        logger.info(f"날짜 필터: {since_date} 이후 기사만 수집")
+    logger.info("=" * 60)
+
+    crawler = NewsCrawler(db, since_date=since_date)
+
+    # 뉴스 크롤링이 필요한 회사 목록 조회
+    companies = db.get_companies_for_news_crawling(limit=max_companies, only_no_news=only_no_news)
+
+    if not companies:
+        logger.info("뉴스 크롤링이 필요한 회사가 없습니다.")
+        return {'total': 0, 'success': 0, 'failed': 0}
+
+    total_target = len(companies)
+    logger.info(f"전체 대상: {total_target}개")
+
+    stats = {
+        'total': total_target,
+        'success': 0,
+        'failed': 0,
+        'total_articles': 0
+    }
+
+    try:
+        for i, company_name in enumerate(companies, 1):
+            start_time = time.time()
+
+            try:
+                logger.info(f"\n[{i}/{total_target}] {company_name} 뉴스 수집 중...")
+
+                # 회사 ID 조회
+                company_id = db.get_company_id_by_name(company_name)
+
+                # 뉴스 크롤링
+                result = crawler.crawl_company_news_sync(company_name, company_id)
+
+                duration = time.time() - start_time
+
+                if result.get('total_found', 0) > 0:
+                    new_count = result.get('new_count', 0)
+                    dup_count = result.get('duplicate_count', 0)
+                    logger.info(f"  → 완료: {result['total_found']}개 발견, 신규 {new_count}개 저장, 중복 {dup_count}개 (소요: {duration:.1f}초)")
+                    stats['success'] += 1
+                    stats['total_articles'] += new_count
+                else:
+                    logger.info(f"  → 검색된 뉴스 없음 (소요: {duration:.1f}초)")
+                    stats['success'] += 1  # 뉴스 없어도 성공으로 처리
+
+            except Exception as e:
+                logger.error(f"  → 뉴스 수집 실패: {e}")
+                stats['failed'] += 1
+
+    finally:
+        crawler.close()
+
+    logger.info("\n" + "=" * 60)
+    logger.info("3차 크롤링 완료 (뉴스 기사)")
+    logger.info("=" * 60)
+    logger.info(f"처리 회사: {stats['total']}개")
+    logger.info(f"성공: {stats['success']}개")
+    logger.info(f"실패: {stats['failed']}개")
+    logger.info(f"신규 저장 기사: {stats['total_articles']}개")
 
     return stats
 
@@ -760,7 +859,8 @@ def main():
         epilog="""
 예시:
     python main.py crawl-jobs         # 1차 크롤링: 채용공고 수집
-    python main.py crawl-companies    # 2차 크롤링: 회사정보 수집
+    python main.py crawl-companies    # 2차 크롤링: 회사정보 수집 (잡플래닛)
+    python main.py crawl-news         # 3차 크롤링: 뉴스 기사 수집 (연합뉴스)
     python main.py crawl              # 전체 크롤링 (1차 + 2차)
     python main.py check-expired      # 만료/삭제 공고 확인
     python main.py analyze            # 분석만 실행
@@ -774,7 +874,7 @@ def main():
 
     parser.add_argument(
         'command',
-        choices=['crawl', 'crawl-jobs', 'crawl-companies', 'check-expired', 'analyze', 'report', 'all', 'schedule', 'company'],
+        choices=['crawl', 'crawl-jobs', 'crawl-companies', 'crawl-news', 'check-expired', 'analyze', 'report', 'all', 'schedule', 'company'],
         help='실행할 명령'
     )
     
@@ -847,8 +947,8 @@ def main():
     parser.add_argument(
         '--max-companies',
         type=int,
-        default=1,
-        help='crawl-companies 명령에서 한 번에 처리할 최대 회사 수 (차단 방지, 기본: 1)'
+        default=None,
+        help='처리할 최대 회사 수 (기본: crawl-companies=1, crawl-news=전체)'
     )
 
     parser.add_argument(
@@ -861,6 +961,19 @@ def main():
         '--no-resume',
         action='store_true',
         help='이미 수집된 회사 건너뛰기 비활성화 (불완전한 회사도 재수집하지 않음)'
+    )
+
+    parser.add_argument(
+        '--only-no-news',
+        action='store_true',
+        help='뉴스가 0건인 회사만 크롤링 (괄호 등으로 검색 실패했던 회사 재시도)'
+    )
+
+    parser.add_argument(
+        '--since-date',
+        type=str,
+        default=None,
+        help='특정 날짜 이후의 기사만 수집 (형식: YYYY-MM-DD, 예: 2024-01-01)'
     )
 
     args = parser.parse_args()
@@ -924,7 +1037,17 @@ def main():
 
             # --no-resume: 불완전한 회사도 재수집하지 않음
             resume = not args.no_resume
-            run_company_crawling(settings, db, logger, max_companies=args.max_companies, resume=resume)
+            # 2차 크롤링 기본값: 1000 (전체)
+            max_companies = args.max_companies if args.max_companies is not None else 1000
+            run_company_crawling(settings, db, logger, max_companies=max_companies, resume=resume)
+
+        elif args.command == 'crawl-news':
+            # 3차 크롤링: 뉴스 기사 수집
+            # 3차 크롤링 기본값: 전체 (1000개 제한)
+            max_companies = args.max_companies if args.max_companies is not None else 1000
+            only_no_news = args.only_no_news if hasattr(args, 'only_no_news') else False
+            since_date = args.since_date if hasattr(args, 'since_date') else None
+            run_news_crawling(settings, db, logger, max_companies=max_companies, only_no_news=only_no_news, since_date=since_date)
 
         elif args.command == 'crawl':
             # 전체 크롤링 (1차 + 2차)
