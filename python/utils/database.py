@@ -99,6 +99,7 @@ class Company(Base):
 
     # 평판 정보
     glassdoor_rating = Column(Float)
+    jobplanet_id = Column(String(50))  # 잡플래닛 회사 ID (URL의 숫자)
     jobplanet_rating = Column(Float)
     jobplanet_url = Column(String(500))  # 잡플래닛 URL
     blind_summary = Column(Text)  # 블라인드 요약
@@ -284,6 +285,68 @@ class CompanyBenefit(Base):
     # 후기 내용
     content = Column(Text)
     item_scores = Column(JSON)
+
+    # 메타
+    crawled_at = Column(DateTime, default=get_kst_now)
+
+
+class CompanySalary(Base):
+    """연봉 정보 테이블 (잡플래닛)"""
+    __tablename__ = 'company_salaries'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    company_name = Column(String(200), nullable=False)
+
+    # 연봉 식별
+    source_site = Column(String(50), default='jobplanet')
+
+    # 년차/직급 정보
+    experience_year = Column(String(50))  # '1년차', '3년차' 등
+    position = Column(String(100))  # 직급/직군
+
+    # 연봉 정보
+    salary_amount = Column(Integer)  # 연봉 (만원 단위)
+    salary_text = Column(String(100))  # '4,500만원' 형태
+    increase_rate = Column(String(50))  # 연봉 인상률
+
+    # 통계 정보 (전체 평균일 경우)
+    is_overall_avg = Column(Boolean, default=False)  # 전체 평균 여부
+    industry_avg = Column(Integer)  # 업계 평균 (만원)
+    industry_rank = Column(String(50))  # 업계 내 순위
+    response_rate = Column(String(20))  # 응답률
+
+    # 연봉 분포 (전체 평균일 경우)
+    salary_min = Column(Integer)
+    salary_lower = Column(Integer)
+    salary_upper = Column(Integer)
+    salary_max = Column(Integer)
+
+    # 메타
+    crawled_at = Column(DateTime, default=get_kst_now)
+
+
+class CompanyNews(Base):
+    """회사 뉴스 기사 테이블 (연합뉴스 등)"""
+    __tablename__ = 'company_news'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='CASCADE'))
+    company_name = Column(String(200), nullable=False)
+
+    # 뉴스 식별
+    source_site = Column(String(50), default='yna')  # 연합뉴스
+    news_url = Column(String(500), nullable=False)
+    news_id = Column(String(100))  # URL에서 추출한 기사 ID
+
+    # 기사 기본 정보 (목록에서 수집)
+    title = Column(String(500))
+    published_at = Column(String(50))  # '2026-01-29 17:16'
+
+    # 기사 상세 정보 (상세 페이지에서 수집)
+    subtitle = Column(String(500))
+    reporter_name = Column(String(100))
+    content = Column(Text)
 
     # 메타
     crawled_at = Column(DateTime, default=get_kst_now)
@@ -507,27 +570,38 @@ class Database:
         """잡플래닛 정보가 없거나 불완전한 회사 목록 조회
 
         Args:
-            include_incomplete: True이면 jobplanet_rating이 NULL인 회사도 포함 (재수집 대상)
+            include_incomplete: True이면 불완전한 회사도 포함 (재수집 대상)
+                - jobplanet_rating이 NULL인 회사
+                - jobplanet_url이 NULL 또는 빈 문자열인 회사
 
         Returns:
             수집이 필요한 회사명 목록
         """
         session = self.get_session()
         try:
+            from sqlalchemy import or_
+
             # 채용공고에 있는 모든 회사
             all_companies = session.query(JobPosting.company_name).distinct().all()
             all_company_names = set(name[0] for name in all_companies if name[0])
 
-            # 완전한 정보가 있는 회사 (jobplanet_rating이 있는 경우)
+            # 완전한 정보가 있는 회사 (jobplanet_rating과 jobplanet_url 모두 있는 경우)
             complete = session.query(Company.name).filter(
-                Company.jobplanet_rating.isnot(None)
+                Company.jobplanet_rating.isnot(None),
+                Company.jobplanet_url.isnot(None),
+                Company.jobplanet_url != ''
             ).all()
             complete_names = set(name[0] for name in complete if name[0])
 
             if include_incomplete:
-                # 불완전한 정보 회사도 재수집 (jobplanet_rating이 NULL인 경우)
+                # 불완전한 정보 회사도 재수집 대상에 포함
+                # (jobplanet_rating이 NULL이거나 jobplanet_url이 NULL/빈 문자열인 경우)
                 incomplete = session.query(Company.name).filter(
-                    Company.jobplanet_rating.is_(None)
+                    or_(
+                        Company.jobplanet_rating.is_(None),
+                        Company.jobplanet_url.is_(None),
+                        Company.jobplanet_url == ''
+                    )
                 ).all()
                 incomplete_names = set(name[0] for name in incomplete if name[0])
 
@@ -751,6 +825,264 @@ class Database:
         try:
             company = session.query(Company).filter_by(name=company_name).first()
             return company.id if company else None
+        finally:
+            session.close()
+
+    def add_company_salaries(self, company_name: str, salary_data: dict, company_id: Optional[int] = None) -> int:
+        """회사 연봉 정보 저장
+
+        Args:
+            company_name: 회사명
+            salary_data: 연봉 데이터 (overall_avg, by_year, salary_distribution 등)
+            company_id: companies 테이블의 ID (없으면 조회)
+
+        Returns:
+            저장된 연봉 정보 개수
+        """
+        session = self.get_session()
+        try:
+            if not company_id:
+                company_id = self.get_company_id_by_name(company_name)
+
+            count = 0
+            source_site = 'jobplanet'
+
+            # 기존 데이터 삭제 (전체 갱신)
+            session.query(CompanySalary).filter_by(
+                company_name=company_name,
+                source_site=source_site
+            ).delete()
+
+            # 1. 전체 평균 연봉 저장
+            if salary_data.get('overall_avg'):
+                # 숫자 추출 (예: "4,500만원" -> 4500)
+                avg_text = salary_data['overall_avg']
+                avg_amount = None
+                import re
+                amount_match = re.search(r'([\d,]+)', avg_text)
+                if amount_match:
+                    avg_amount = int(amount_match.group(1).replace(',', ''))
+
+                dist = salary_data.get('salary_distribution', {})
+                overall = CompanySalary(
+                    company_id=company_id,
+                    company_name=company_name,
+                    source_site=source_site,
+                    is_overall_avg=True,
+                    salary_amount=avg_amount,
+                    salary_text=avg_text,
+                    industry_avg=self._parse_salary_amount(salary_data.get('industry_avg')),
+                    industry_rank=salary_data.get('industry_rank'),
+                    response_rate=salary_data.get('response_rate'),
+                    salary_min=self._parse_salary_amount(dist.get('min')),
+                    salary_lower=self._parse_salary_amount(dist.get('lower')),
+                    salary_upper=self._parse_salary_amount(dist.get('upper')),
+                    salary_max=self._parse_salary_amount(dist.get('max'))
+                )
+                session.add(overall)
+                count += 1
+
+            # 2. 년차별 연봉 저장
+            for year_data in salary_data.get('by_year', []):
+                salary_text = year_data.get('salary', '')
+                salary_amount = self._parse_salary_amount(salary_text)
+
+                year_salary = CompanySalary(
+                    company_id=company_id,
+                    company_name=company_name,
+                    source_site=source_site,
+                    is_overall_avg=False,
+                    experience_year=year_data.get('year'),
+                    salary_amount=salary_amount,
+                    salary_text=salary_text,
+                    increase_rate=year_data.get('increase_rate')
+                )
+                session.add(year_salary)
+                count += 1
+
+            # 3. 직급별 연봉 저장 (by_position이 by_year와 다른 경우)
+            for pos_data in salary_data.get('by_position_detail', []):
+                salary_text = pos_data.get('salary', '')
+                salary_amount = self._parse_salary_amount(salary_text)
+
+                pos_salary = CompanySalary(
+                    company_id=company_id,
+                    company_name=company_name,
+                    source_site=source_site,
+                    is_overall_avg=False,
+                    position=pos_data.get('position'),
+                    salary_amount=salary_amount,
+                    salary_text=salary_text
+                )
+                session.add(pos_salary)
+                count += 1
+
+            session.commit()
+            return count
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def _parse_salary_amount(self, salary_str) -> Optional[int]:
+        """연봉 문자열에서 숫자 추출 (만원 단위)"""
+        if not salary_str:
+            return None
+        import re
+        # "4,500만원", "4500", "4,500" 등에서 숫자 추출
+        if isinstance(salary_str, (int, float)):
+            return int(salary_str)
+        match = re.search(r'([\d,]+)', str(salary_str))
+        if match:
+            return int(match.group(1).replace(',', ''))
+        return None
+
+    def add_company_news(self, company_name: str, news_list: List[dict], company_id: Optional[int] = None) -> dict:
+        """회사 뉴스 기사 저장 (회사 단위로 저장, 중복 방지)
+
+        Args:
+            company_name: 회사명
+            news_list: 뉴스 기사 목록 [{news_url, title, published_at, subtitle, reporter_name, content}, ...]
+            company_id: companies 테이블의 ID (없으면 조회)
+
+        Returns:
+            저장 결과 {new_count, duplicate_count, updated_count}
+        """
+        session = self.get_session()
+        try:
+            if not company_id:
+                company_id = self.get_company_id_by_name(company_name)
+
+            import re
+            source_site = 'yna'  # 연합뉴스
+            new_count = 0
+            duplicate_count = 0
+            updated_count = 0
+
+            for news_data in news_list:
+                news_url = news_data.get('news_url') or news_data.get('url')
+                if not news_url:
+                    continue
+
+                # URL에서 뉴스 ID 추출 (예: AKR20260129166300017)
+                news_id = None
+                id_match = re.search(r'/view/([A-Z0-9]+)', news_url)
+                if id_match:
+                    news_id = id_match.group(1)
+
+                # 중복 체크 (news_url 기준)
+                existing = session.query(CompanyNews).filter_by(
+                    source_site=source_site,
+                    news_url=news_url
+                ).first()
+
+                if existing:
+                    # 이미 존재하는 기사
+                    if news_data.get('content') and not existing.content:
+                        # 상세 정보가 없었으면 업데이트
+                        existing.content = news_data['content']
+                        existing.subtitle = news_data.get('subtitle')
+                        existing.reporter_name = news_data.get('reporter_name')
+                        existing.crawled_at = get_kst_now()
+                        updated_count += 1
+                    else:
+                        duplicate_count += 1
+                else:
+                    # 새로 추가
+                    news = CompanyNews(
+                        company_id=company_id,
+                        company_name=company_name,
+                        source_site=source_site,
+                        news_url=news_url,
+                        news_id=news_id,
+                        title=news_data.get('title'),
+                        published_at=news_data.get('published_at'),
+                        subtitle=news_data.get('subtitle'),
+                        reporter_name=news_data.get('reporter_name'),
+                        content=news_data.get('content')
+                    )
+                    session.add(news)
+                    new_count += 1
+
+            session.commit()
+            return {
+                'new_count': new_count,
+                'duplicate_count': duplicate_count,
+                'updated_count': updated_count,
+                'total': new_count + duplicate_count + updated_count
+            }
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+
+    def get_companies_for_news_crawling(self, limit: int = 100, only_no_news: bool = False) -> List[str]:
+        """뉴스 크롤링이 필요한 회사 목록 조회 (1차 크롤링 기준)
+
+        1차 크롤링(채용공고)에서 수집된 회사들 중 뉴스가 없거나 오래된 회사를 대상으로 합니다.
+
+        Args:
+            limit: 최대 회사 수
+            only_no_news: True이면 뉴스가 0건인 회사만 반환
+
+        Returns:
+            회사명 목록
+        """
+        session = self.get_session()
+        try:
+            from sqlalchemy import func, distinct
+
+            # 1차 크롤링으로 수집된 회사들 (채용공고가 있는 회사)
+            companies_with_jobs = session.query(
+                JobPosting.company_name.label('name')
+            ).distinct().subquery()
+
+            # 뉴스가 있는 회사와 최근 크롤링 일시
+            news_subquery = session.query(
+                CompanyNews.company_name,
+                func.max(CompanyNews.crawled_at).label('last_crawled'),
+                func.count(CompanyNews.id).label('news_count')
+            ).group_by(CompanyNews.company_name).subquery()
+
+            # 기본 쿼리
+            query = session.query(Company.name).join(
+                companies_with_jobs,
+                Company.name == companies_with_jobs.c.name
+            ).outerjoin(
+                news_subquery,
+                Company.name == news_subquery.c.company_name
+            )
+
+            if only_no_news:
+                # 뉴스가 0건인 회사만 (한번도 수집 안됐거나 결과가 없었던 회사)
+                query = query.filter(news_subquery.c.news_count.is_(None))
+
+            # 뉴스 없는 회사 우선으로 정렬
+            companies = query.order_by(
+                news_subquery.c.last_crawled.asc().nullsfirst()
+            ).limit(limit).all()
+
+            return [c[0] for c in companies]
+        finally:
+            session.close()
+
+    def get_existing_news_urls(self, company_name: str) -> set:
+        """회사의 기존 뉴스 URL 목록 조회
+
+        Args:
+            company_name: 회사명
+
+        Returns:
+            기존 뉴스 URL 세트
+        """
+        session = self.get_session()
+        try:
+            urls = session.query(CompanyNews.news_url).filter(
+                CompanyNews.company_name == company_name
+            ).all()
+            return {url[0] for url in urls}
         finally:
             session.close()
 
