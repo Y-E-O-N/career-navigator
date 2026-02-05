@@ -46,13 +46,26 @@ class WantedPlaywrightCrawler:
         self.request_delay = settings.crawler.request_delay
         self.last_found_job_ids = set()  # 마지막 크롤링에서 발견된 모든 job_id
 
-    async def init_browser(self, headless: bool = True):
+        # 설정에서 값 로드
+        self.page_load_delay = settings.wanted.page_load_delay
+        self.scroll_delay = settings.wanted.scroll_delay
+        self.detail_load_delay = settings.wanted.detail_load_delay
+        self.between_requests_delay = settings.wanted.between_requests_delay
+        self.page_timeout = settings.wanted.page_timeout
+        self.selector_timeout = settings.wanted.selector_timeout
+        self.headless = settings.wanted.headless
+
+    async def init_browser(self, headless: bool = None):
         """브라우저 초기화"""
         if not PLAYWRIGHT_AVAILABLE:
             raise ImportError("playwright가 설치되어 있지 않습니다. 'pip install playwright && playwright install chromium' 실행하세요.")
 
         if self.browser:
             return
+
+        # headless가 지정되지 않으면 설정값 사용
+        if headless is None:
+            headless = self.headless
 
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=headless)
@@ -96,15 +109,15 @@ class WantedPlaywrightCrawler:
             self.logger.info(f"검색 URL: {search_url}")
 
             # 페이지 로드
-            await page.goto(search_url, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(5)  # React 렌더링 대기
+            await page.goto(search_url, wait_until='domcontentloaded', timeout=self.page_timeout)
+            await asyncio.sleep(self.page_load_delay)  # React 렌더링 대기
 
             # 핵심 셀렉터: data-position-id 속성이 있는 a 태그
             job_card_selector = 'a[data-position-id]'
 
             # 채용공고 카드 대기 (state='attached'로 DOM 존재만 확인)
             try:
-                await page.wait_for_selector(job_card_selector, state='attached', timeout=15000)
+                await page.wait_for_selector(job_card_selector, state='attached', timeout=self.selector_timeout)
                 self.logger.info("채용공고 카드 발견")
             except Exception as e:
                 self.logger.warning(f"채용공고 카드 대기 타임아웃: {e}")
@@ -266,8 +279,8 @@ class WantedPlaywrightCrawler:
         }
 
         try:
-            response = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(2)
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=self.page_timeout)
+            await asyncio.sleep(self.detail_load_delay)
 
             # 1. HTTP 상태 코드 확인
             if response and response.status == 404:
@@ -373,8 +386,8 @@ class WantedPlaywrightCrawler:
 
         try:
             self.logger.debug(f"상세 페이지 조회: {url}")
-            await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            await asyncio.sleep(3)
+            await page.goto(url, wait_until='domcontentloaded', timeout=self.page_timeout)
+            await asyncio.sleep(self.between_requests_delay)
 
             detail = {
                 'job_id': job_id,
