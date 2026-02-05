@@ -36,6 +36,23 @@ class CrawlerConfig:
 
 
 @dataclass
+class WantedConfig:
+    """원티드 크롤링 설정 (1차 크롤링)"""
+    # 대기 시간 (초)
+    page_load_delay: float = float(os.getenv("WANTED_PAGE_LOAD_DELAY", "5.0"))  # React 렌더링 대기
+    scroll_delay: float = float(os.getenv("WANTED_SCROLL_DELAY", "2.0"))
+    detail_load_delay: float = float(os.getenv("WANTED_DETAIL_LOAD_DELAY", "2.0"))
+    between_requests_delay: float = float(os.getenv("WANTED_BETWEEN_REQUESTS_DELAY", "3.0"))
+
+    # 타임아웃 (밀리초)
+    page_timeout: int = int(os.getenv("WANTED_PAGE_TIMEOUT", "30000"))
+    selector_timeout: int = int(os.getenv("WANTED_SELECTOR_TIMEOUT", "15000"))
+
+    # 기타 설정
+    headless: bool = os.getenv("WANTED_HEADLESS", "false").lower() == "true"
+
+
+@dataclass
 class DatabaseConfig:
     """데이터베이스 설정 - SQLite, PostgreSQL, Supabase 지원"""
     # 환경변수로 클라우드 DB 설정 가능
@@ -107,7 +124,7 @@ class SchedulerConfig:
 
 @dataclass
 class JobplanetConfig:
-    """잡플래닛 크롤링 설정"""
+    """잡플래닛 크롤링 설정 (2차 크롤링)"""
     # 페이지 수 제한
     review_max_pages: int = int(os.getenv("JOBPLANET_REVIEW_MAX_PAGES", "50"))
     interview_max_pages: int = int(os.getenv("JOBPLANET_INTERVIEW_MAX_PAGES", "50"))
@@ -122,10 +139,41 @@ class JobplanetConfig:
     scroll_delay: float = float(os.getenv("JOBPLANET_SCROLL_DELAY", "2.0"))
     between_pages_delay: float = float(os.getenv("JOBPLANET_BETWEEN_PAGES_DELAY", "2.0"))
     login_delay: float = float(os.getenv("JOBPLANET_LOGIN_DELAY", "8.0"))
+    popup_close_delay: float = float(os.getenv("JOBPLANET_POPUP_CLOSE_DELAY", "1.0"))
+    tab_switch_delay: float = float(os.getenv("JOBPLANET_TAB_SWITCH_DELAY", "3.0"))
+    element_wait_delay: float = float(os.getenv("JOBPLANET_ELEMENT_WAIT_DELAY", "1.0"))
+
+    # 스크롤 설정
+    scroll_min: int = int(os.getenv("JOBPLANET_SCROLL_MIN", "500"))  # 최소 스크롤 거리 (픽셀)
+    scroll_max: int = int(os.getenv("JOBPLANET_SCROLL_MAX", "700"))  # 최대 스크롤 거리 (픽셀)
+    scroll_delay_min: float = float(os.getenv("JOBPLANET_SCROLL_DELAY_MIN", "0.3"))  # 최소 스크롤 간격 (초)
+    scroll_delay_max: float = float(os.getenv("JOBPLANET_SCROLL_DELAY_MAX", "0.6"))  # 최대 스크롤 간격 (초)
+
+    # 브라우저 설정
+    headless: bool = os.getenv("JOBPLANET_HEADLESS", "false").lower() == "true"
 
     # 로그인 정보
     email: str = os.getenv("JOBPLANET_EMAIL", "")
     password: str = os.getenv("JOBPLANET_PASSWORD", "")
+
+
+@dataclass
+class NewsConfig:
+    """뉴스 크롤링 설정 (연합뉴스)"""
+    # 페이지 수 제한
+    max_pages: int = int(os.getenv("NEWS_MAX_PAGES", "10"))
+
+    # 대기 시간 (초)
+    page_load_delay: float = float(os.getenv("NEWS_PAGE_LOAD_DELAY", "3.0"))
+    article_delay: float = float(os.getenv("NEWS_ARTICLE_DELAY", "1.0"))
+    scroll_delay: float = float(os.getenv("NEWS_SCROLL_DELAY", "0.5"))
+
+    # 스크롤 설정
+    scroll_distance: int = int(os.getenv("NEWS_SCROLL_DISTANCE", "200"))  # 픽셀
+    scroll_interval: int = int(os.getenv("NEWS_SCROLL_INTERVAL", "300"))  # 밀리초
+
+    # 기타 설정
+    headless: bool = os.getenv("NEWS_HEADLESS", "false").lower() == "true"
 
 
 @dataclass
@@ -206,12 +254,14 @@ class Settings:
     """통합 설정 클래스"""
     def __init__(self, config_file: Optional[str] = None):
         self.crawler = CrawlerConfig()
+        self.wanted = WantedConfig()
         self.database = DatabaseConfig()
         self.analyzer = AnalyzerConfig()
         self.scheduler = SchedulerConfig()
         self.search_keywords = SearchKeywords()
         self.jobplanet = JobplanetConfig()
-        
+        self.news = NewsConfig()
+
         # 설정 파일이 있으면 로드
         if config_file and Path(config_file).exists():
             self.load_from_file(config_file)
