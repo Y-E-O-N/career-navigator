@@ -6,28 +6,49 @@ import config from '@/config';
 import type { JobPosting } from '@/lib/supabase/types';
 import AnalyzeCompanyButton from '@/components/AnalyzeCompanyButton';
 
-// ISR 재검증 주기 (초)
-export const revalidate = 3600;
+// ISR 재검증 주기 (초) - 새 공고 빠르게 반영
+export const revalidate = 600; // 10분
 
 interface JobsPageProps {
   searchParams: Promise<{
     keyword?: string;
     site?: string;
     page?: string;
+    status?: string; // active, closed, today
   }>;
 }
 
-async function getJobs(params: { keyword?: string; site?: string; page?: string }): Promise<{ jobs: JobPosting[]; count: number }> {
+async function getJobs(params: {
+  keyword?: string;
+  site?: string;
+  page?: string;
+  status?: string;
+}): Promise<{ jobs: JobPosting[]; count: number }> {
   const supabase = await createServerClient();
 
   const page = Number(params.page) || 1;
   const limit = config.pagination.jobsPerPage;
   const offset = (page - 1) * limit;
+  const status = params.status || 'active';
 
   let query = supabase
     .from('job_postings')
-    .select('*', { count: 'exact' })
-    .eq('is_active', true)
+    .select('*', { count: 'exact' });
+
+  // 상태별 필터
+  if (status === 'active') {
+    query = query.eq('is_active', true);
+  } else if (status === 'closed') {
+    query = query.eq('is_active', false);
+  } else if (status === 'today') {
+    // 오늘 추가된 공고 (KST 기준)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    query = query.gte('crawled_at', today.toISOString());
+  }
+
+  // 정렬 및 페이지네이션
+  query = query
     .order('crawled_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
@@ -54,8 +75,28 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
   const { jobs, count } = await getJobs(params);
   const currentPage = Number(params.page) || 1;
   const totalPages = Math.ceil(count / config.pagination.jobsPerPage);
+  const currentStatus = params.status || 'active';
 
   const sites = config.jobSites.filter(s => s.enabled).map(s => s.id);
+
+  // 탭 정의
+  const tabs = [
+    { id: 'active', label: '모집중', icon: '🟢' },
+    { id: 'today', label: '오늘 추가', icon: '🆕' },
+    { id: 'closed', label: '마감', icon: '⏹️' },
+  ];
+
+  // 현재 필터 유지하면서 URL 생성
+  const buildUrl = (newParams: Record<string, string | undefined>) => {
+    const searchParams = new URLSearchParams();
+    const merged = { ...params, ...newParams, page: undefined }; // 탭 변경 시 페이지 리셋
+
+    Object.entries(merged).forEach(([key, value]) => {
+      if (value) searchParams.set(key, value);
+    });
+
+    return `/jobs?${searchParams.toString()}`;
+  };
 
   return (
     <div className="lg:ml-64 space-y-6">
@@ -67,9 +108,30 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
         </p>
       </div>
 
+      {/* Status Tabs */}
+      <div className="flex gap-2 border-b border-gray-200">
+        {tabs.map((tab) => (
+          <Link
+            key={tab.id}
+            href={buildUrl({ status: tab.id })}
+            className={`
+              px-4 py-3 text-sm font-medium border-b-2 transition-colors
+              ${currentStatus === tab.id
+                ? 'border-primary-600 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
+          >
+            <span className="mr-1.5">{tab.icon}</span>
+            {tab.label}
+          </Link>
+        ))}
+      </div>
+
       {/* Filters */}
       <Card>
         <form className="flex flex-wrap gap-4">
+          <input type="hidden" name="status" value={currentStatus} />
           <div className="flex-1 min-w-[200px]">
             <input
               type="text"
@@ -109,12 +171,17 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
             <Card key={job.id} className="card-hover relative">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div className="flex-1">
-                  <Link
-                    href={`/jobs/${job.id}`}
-                    className="text-lg font-semibold text-gray-900 hover:text-primary-600 after:absolute after:inset-0 after:content-['']"
-                  >
-                    {job.title}
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/jobs/${job.id}`}
+                      className="text-lg font-semibold text-gray-900 hover:text-primary-600 after:absolute after:inset-0 after:content-['']"
+                    >
+                      {job.title}
+                    </Link>
+                    {!job.is_active && (
+                      <Badge variant="danger" size="sm">마감</Badge>
+                    )}
+                  </div>
                   <p className="text-gray-600 mt-1">
                     {job.company_name}
                   </p>
@@ -174,7 +241,12 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
         ) : (
           <Card>
             <p className="text-center text-gray-500 py-12">
-              검색 결과가 없습니다.
+              {currentStatus === 'today'
+                ? '오늘 추가된 채용공고가 없습니다.'
+                : currentStatus === 'closed'
+                ? '마감된 채용공고가 없습니다.'
+                : '검색 결과가 없습니다.'
+              }
             </p>
           </Card>
         )}
@@ -185,7 +257,7 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
         <div className="flex justify-center gap-2">
           {currentPage > 1 && (
             <Link
-              href={`/jobs?page=${currentPage - 1}${params.keyword ? `&keyword=${params.keyword}` : ''}${params.site ? `&site=${params.site}` : ''}`}
+              href={`/jobs?page=${currentPage - 1}&status=${currentStatus}${params.keyword ? `&keyword=${params.keyword}` : ''}${params.site ? `&site=${params.site}` : ''}`}
               className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
               이전
@@ -196,7 +268,7 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
           </span>
           {currentPage < totalPages && (
             <Link
-              href={`/jobs?page=${currentPage + 1}${params.keyword ? `&keyword=${params.keyword}` : ''}${params.site ? `&site=${params.site}` : ''}`}
+              href={`/jobs?page=${currentPage + 1}&status=${currentStatus}${params.keyword ? `&keyword=${params.keyword}` : ''}${params.site ? `&site=${params.site}` : ''}`}
               className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
               다음
