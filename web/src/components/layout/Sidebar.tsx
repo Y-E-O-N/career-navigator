@@ -67,7 +67,7 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="p-4 border-t border-gray-200">
         <div className="text-xs text-gray-500">
-          <p>매일 09:00 자동 업데이트</p>
+          <p>매일 23:00 자동 업데이트</p>
           <p className="mt-1">Powered by Supabase + Next.js</p>
         </div>
       </div>
