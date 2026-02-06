@@ -72,4 +72,6 @@ memo.md
 *.sqlite
 *.sqlite3
 
+*가이드.md
+
 nul
