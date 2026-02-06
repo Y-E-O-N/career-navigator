@@ -33,6 +33,7 @@ export async function POST(request: NextRequest) {
           'Accept': 'application/vnd.github.v3+json',
           'Authorization': `Bearer ${GITHUB_TOKEN}`,
           'Content-Type': 'application/json',
+          'User-Agent': 'career-navigator-web',
         },
         body: JSON.stringify({
           ref: 'main',
