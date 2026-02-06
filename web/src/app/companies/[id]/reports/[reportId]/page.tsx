@@ -285,23 +285,6 @@ export default async function ReportDetailPage({ params }: PageProps) {
           기업 페이지로 돌아가기
         </Link>
       </div>
-
-      {/* Custom styles for report content */}
-      <style jsx global>{`
-        .report-content h1 { font-size: 1.5rem; font-weight: 700; margin-top: 2rem; margin-bottom: 1rem; color: #1f2937; border-bottom: 2px solid #3b82f6; padding-bottom: 0.5rem; }
-        .report-content h2 { font-size: 1.25rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #374151; padding-left: 0.75rem; border-left: 4px solid #3b82f6; }
-        .report-content h3 { font-size: 1.1rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.5rem; color: #4b5563; }
-        .report-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-        .report-content th, .report-content td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
-        .report-content th { background-color: #f9fafb; font-weight: 600; }
-        .report-content .tag-fact { display: inline-block; background-color: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; }
-        .report-content .tag-interpretation { display: inline-block; background-color: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; }
-        .report-content .tag-judgment { display: inline-block; background-color: #fce7f3; color: #9d174d; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; }
-        .report-content .source-label { display: inline-block; background-color: #f3f4f6; color: #374151; padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; font-weight: 600; }
-        .report-content .verdict-go { display: inline-block; background-color: #16a34a; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
-        .report-content .verdict-conditional { display: inline-block; background-color: #d97706; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
-        .report-content .verdict-nogo { display: inline-block; background-color: #dc2626; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
-      `}</style>
     </div>
   );
 }
