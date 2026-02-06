@@ -23,6 +23,7 @@ openai>=1.0.0      # OpenAI API (optional)
 
 # Data Processing
 pandas>=2.0.0  # Optional: for advanced data analysis
+markdown>=3.5.0  # Markdown to HTML conversion for reports
 
 # Utilities
 python-dotenv>=1.0.0  # Environment variables
