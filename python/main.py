@@ -952,12 +952,13 @@ def run_scheduler(settings: Settings, db: Database, logger):
 
 
 def run_all(settings: Settings, db: Database, logger, force_analyze: bool = False):
-    """전체 파이프라인 실행 (크롤링 + 시장 분석 + 리포트)
+    """전체 파이프라인 실행 (크롤링 + 만료확인 + 시장 분석 + 리포트)
 
     1. 채용공고 크롤링 (1차)
-    2. 회사정보 크롤링 (2차)
-    3. 시장 분석 (키워드별)
-    4. 리포트 생성 (마크다운/HTML)
+    2. 만료/삭제 공고 확인
+    3. 회사정보 크롤링 (2차)
+    4. 시장 분석 (키워드별)
+    5. 리포트 생성 (마크다운/HTML)
 
     Note: 기업 분석(analyze-report)은 별도 명령으로 실행해야 합니다.
     """
@@ -968,20 +969,23 @@ def run_all(settings: Settings, db: Database, logger, force_analyze: bool = Fals
 
     start_time = datetime.now()
 
-    # 1차 크롤링: 채용공고 수집
+    # 1. 채용공고 크롤링
     job_stats = run_job_crawling(settings, db, logger)
     total_jobs = job_stats.get('total_found', 0)
 
-    # 2차 크롤링: 회사정보 수집
+    # 2. 만료/삭제 공고 확인
+    run_check_expired(settings, db, logger)
+
+    # 3. 회사정보 크롤링
     run_company_crawling(settings, db, logger)
 
-    # 3. 시장 분석
+    # 4. 시장 분석
     if total_jobs > 0 or force_analyze:
         if force_analyze and total_jobs == 0:
             logger.info("강제 분석 모드: DB에 있는 기존 데이터로 분석을 실행합니다.")
         results = run_analysis(settings, db, logger)
 
-        # 4. 리포트 생성
+        # 5. 리포트 생성
         if results:
             generate_reports(settings, db, logger)
     else:
