@@ -1004,8 +1004,12 @@ def main():
     python main.py all                # 전체 실행
     python main.py schedule           # 스케줄러 시작
     python main.py company "카카오"    # 특정 회사 분석 (레거시)
-    python main.py analyze-report "카카오"  # 기업 분석 보고서 생성
-    python main.py --config my.json all  # 설정 파일 지정
+
+    # 기업 분석 보고서 (기본: LLM 호출 + DB 저장 + HTML)
+    python main.py analyze-report "카카오"              # 전체 실행
+    python main.py analyze-report "카카오" --prompt-only  # 프롬프트만 생성
+    python main.py analyze-report "카카오" --data-summary # 데이터 요약만
+    python main.py analyze-report "카카오" --no-save-db   # DB 저장 안 함
         """
     )
 
@@ -1143,9 +1147,9 @@ def main():
     )
 
     parser.add_argument(
-        '--generate-llm',
+        '--prompt-only',
         action='store_true',
-        help='analyze-report: LLM을 호출하여 보고서 생성 (기본: 프롬프트만 생성)'
+        help='analyze-report: 프롬프트만 생성 (LLM 호출 안 함)'
     )
 
     parser.add_argument(
@@ -1154,17 +1158,17 @@ def main():
         help='analyze-report: 데이터 요약만 출력 (프롬프트 생성 없이)'
     )
 
-    # Phase 4: 저장 및 내보내기 옵션
+    # Phase 4: 저장 및 내보내기 옵션 (기본값: 모두 활성화)
     parser.add_argument(
-        '--save-db',
+        '--no-save-db',
         action='store_true',
-        help='analyze-report: 보고서를 DB에 저장'
+        help='analyze-report: DB 저장 안 함 (기본: 저장함)'
     )
 
     parser.add_argument(
-        '--export-html',
+        '--no-html',
         action='store_true',
-        help='analyze-report: HTML 파일로 내보내기'
+        help='analyze-report: HTML 내보내기 안 함 (기본: 내보냄)'
     )
 
     parser.add_argument(
@@ -1287,6 +1291,7 @@ def main():
 
         elif args.command == 'analyze-report':
             # 기업 분석 보고서 생성
+            # 기본 동작: LLM 호출 + DB 저장 + HTML 내보내기
             if not args.target:
                 logger.error("회사 이름을 지정해주세요. 예: python main.py analyze-report '카카오'")
                 sys.exit(1)
@@ -1298,11 +1303,11 @@ def main():
                 output_dir=args.output_dir,
                 profile_path=args.profile,
                 weights_str=args.weights,
-                generate_llm=args.generate_llm,
+                generate_llm=not args.prompt_only,  # 기본: LLM 호출
                 data_summary_only=args.data_summary,
-                # Phase 4 옵션
-                save_to_db=args.save_db,
-                export_html=args.export_html,
+                # Phase 4 옵션 (기본: 모두 활성화)
+                save_to_db=not args.no_save_db,     # 기본: DB 저장
+                export_html=not args.no_html,       # 기본: HTML 내보내기
                 export_pdf=args.export_pdf,
                 use_cache=not args.no_cache,
                 cache_days=args.cache_days
