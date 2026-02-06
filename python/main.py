@@ -612,6 +612,142 @@ def run_top_companies_analysis(settings: Settings, db: Database, logger):
     return run_company_crawling(settings, db, logger)
 
 
+def run_company_report(
+    company_name: str,
+    db: Database,
+    logger,
+    job_posting_id: int = None,
+    output_dir: str = './reports/company_analysis',
+    profile_path: str = None,
+    weights_str: str = None,
+    generate_llm: bool = False,
+    data_summary_only: bool = False,
+    # Phase 4 옵션
+    save_to_db: bool = False,
+    export_html: bool = False,
+    export_pdf: bool = False,
+    use_cache: bool = True,
+    cache_days: int = 7
+):
+    """
+    기업 분석 보고서 생성
+
+    Args:
+        company_name: 분석할 회사명
+        db: 데이터베이스 인스턴스
+        logger: 로거
+        job_posting_id: 특정 채용공고 ID (선택)
+        output_dir: 출력 디렉토리
+        profile_path: 지원자 프로필 JSON 파일 경로
+        weights_str: 가중치 문자열
+        generate_llm: LLM 호출 여부
+        data_summary_only: 데이터 요약만 출력
+        save_to_db: DB 저장 여부
+        export_html: HTML 내보내기 여부
+        export_pdf: PDF 내보내기 여부
+        use_cache: 캐시 사용 여부
+        cache_days: 캐시 유효 기간
+    """
+    from analyzers.report_orchestrator import (
+        CompanyReportOrchestrator,
+        parse_weights_string,
+        load_applicant_profile
+    )
+
+    logger.info("=" * 60)
+    logger.info(f"기업 분석 보고서 생성: {company_name}")
+    logger.info("=" * 60)
+
+    # 오케스트레이터 초기화
+    orchestrator = CompanyReportOrchestrator(db=db, output_dir=output_dir)
+
+    # 데이터 요약만 출력하는 경우
+    if data_summary_only:
+        logger.info("데이터 요약 모드")
+        summary = orchestrator.get_company_data_summary(company_name)
+
+        logger.info(f"\n회사명: {summary['company_name']}")
+        logger.info(f"회사 ID: {summary['company_id']}")
+        logger.info(f"최소 데이터 충족: {'예' if summary['has_minimum_data'] else '아니오'}")
+        logger.info(f"\n데이터 가용성:")
+
+        for source, count in summary['data_availability'].items():
+            status = "✓" if count else "✗"
+            logger.info(f"  {status} {source}: {count}")
+
+        if summary['job_titles']:
+            logger.info(f"\n채용공고 ({summary['job_postings_count']}건):")
+            for title in summary['job_titles']:
+                logger.info(f"  - {title}")
+
+        return summary
+
+    # 지원자 프로필 로드
+    applicant_profile = None
+    if profile_path:
+        applicant_profile = load_applicant_profile(profile_path)
+        if applicant_profile:
+            logger.info(f"지원자 프로필 로드: {profile_path}")
+
+    # 가중치 파싱
+    priority_weights = None
+    if weights_str:
+        priority_weights = parse_weights_string(weights_str)
+        if priority_weights:
+            logger.info(f"가중치 설정: {priority_weights.to_dict()}")
+
+    # 분석 실행
+    result = orchestrator.analyze_company(
+        company_name=company_name,
+        job_posting_id=job_posting_id,
+        applicant_profile=applicant_profile,
+        priority_weights=priority_weights,
+        save_prompt=True,
+        generate_report=generate_llm,
+        # Phase 4 옵션
+        save_to_db=save_to_db,
+        export_html=export_html,
+        export_pdf=export_pdf,
+        use_cache=use_cache,
+        cache_max_days=cache_days
+    )
+
+    # 결과 출력
+    logger.info("\n" + "=" * 60)
+    logger.info("분석 결과")
+    logger.info("=" * 60)
+    logger.info(f"상태: {result['status']}")
+
+    logger.info("\n데이터 가용성:")
+    for source, count in result['data_availability'].items():
+        status = "✓" if count else "✗"
+        logger.info(f"  {status} {source}: {count}")
+
+    if result.get('prompt_file'):
+        logger.info(f"\n프롬프트 파일: {result['prompt_file']}")
+
+    if result.get('report_file'):
+        logger.info(f"보고서 파일: {result['report_file']}")
+
+    # Phase 4 결과
+    if result.get('from_cache'):
+        logger.info(f"\n[캐시에서 로드됨]")
+
+    if result.get('html_file'):
+        logger.info(f"HTML 파일: {result['html_file']}")
+
+    if result.get('pdf_file'):
+        logger.info(f"PDF 파일: {result['pdf_file']}")
+
+    if result.get('db_report_id'):
+        logger.info(f"DB 저장 ID: {result['db_report_id']}")
+
+    if result.get('error'):
+        logger.error(f"오류: {result['error']}")
+
+    return result
+
+
 def run_check_expired(settings: Settings, db: Database, logger, days: int = 7) -> dict:
     """
     만료/삭제된 채용공고 확인
@@ -867,14 +1003,15 @@ def main():
     python main.py report             # 리포트 생성
     python main.py all                # 전체 실행
     python main.py schedule           # 스케줄러 시작
-    python main.py company "카카오"    # 특정 회사 분석
+    python main.py company "카카오"    # 특정 회사 분석 (레거시)
+    python main.py analyze-report "카카오"  # 기업 분석 보고서 생성
     python main.py --config my.json all  # 설정 파일 지정
         """
     )
 
     parser.add_argument(
         'command',
-        choices=['crawl', 'crawl-jobs', 'crawl-companies', 'crawl-news', 'check-expired', 'analyze', 'report', 'all', 'schedule', 'company'],
+        choices=['crawl', 'crawl-jobs', 'crawl-companies', 'crawl-news', 'check-expired', 'analyze', 'report', 'all', 'schedule', 'company', 'analyze-report'],
         help='실행할 명령'
     )
     
@@ -976,6 +1113,79 @@ def main():
         help='특정 날짜 이후의 기사만 수집 (형식: YYYY-MM-DD, 예: 2024-01-01)'
     )
 
+    # analyze-report 명령 전용 옵션
+    parser.add_argument(
+        '--job-id',
+        type=int,
+        default=None,
+        help='analyze-report: 특정 채용공고 ID (미지정 시 전체 공고 분석)'
+    )
+
+    parser.add_argument(
+        '--output-dir',
+        type=str,
+        default='./reports/company_analysis',
+        help='analyze-report: 보고서 저장 디렉토리'
+    )
+
+    parser.add_argument(
+        '--profile',
+        type=str,
+        default=None,
+        help='analyze-report: 지원자 프로필 JSON 파일 경로'
+    )
+
+    parser.add_argument(
+        '--weights',
+        type=str,
+        default=None,
+        help='analyze-report: 우선순위 가중치 (예: "성장성:30,안정성:20,보상:20,워라밸:15,직무적합:15")'
+    )
+
+    parser.add_argument(
+        '--generate-llm',
+        action='store_true',
+        help='analyze-report: LLM을 호출하여 보고서 생성 (기본: 프롬프트만 생성)'
+    )
+
+    parser.add_argument(
+        '--data-summary',
+        action='store_true',
+        help='analyze-report: 데이터 요약만 출력 (프롬프트 생성 없이)'
+    )
+
+    # Phase 4: 저장 및 내보내기 옵션
+    parser.add_argument(
+        '--save-db',
+        action='store_true',
+        help='analyze-report: 보고서를 DB에 저장'
+    )
+
+    parser.add_argument(
+        '--export-html',
+        action='store_true',
+        help='analyze-report: HTML 파일로 내보내기'
+    )
+
+    parser.add_argument(
+        '--export-pdf',
+        action='store_true',
+        help='analyze-report: PDF 파일로 내보내기 (weasyprint 필요)'
+    )
+
+    parser.add_argument(
+        '--no-cache',
+        action='store_true',
+        help='analyze-report: 캐시 사용 안 함 (항상 새로 생성)'
+    )
+
+    parser.add_argument(
+        '--cache-days',
+        type=int,
+        default=7,
+        help='analyze-report: 캐시 유효 기간 (일, 기본: 7)'
+    )
+
     args = parser.parse_args()
     
     # 디렉토리 생성
@@ -1074,7 +1284,30 @@ def main():
                 logger.error("회사 이름을 지정해주세요. 예: python main.py company '카카오'")
                 sys.exit(1)
             run_company_analysis(args.target, db, logger)
-            
+
+        elif args.command == 'analyze-report':
+            # 기업 분석 보고서 생성
+            if not args.target:
+                logger.error("회사 이름을 지정해주세요. 예: python main.py analyze-report '카카오'")
+                sys.exit(1)
+            run_company_report(
+                company_name=args.target,
+                db=db,
+                logger=logger,
+                job_posting_id=args.job_id,
+                output_dir=args.output_dir,
+                profile_path=args.profile,
+                weights_str=args.weights,
+                generate_llm=args.generate_llm,
+                data_summary_only=args.data_summary,
+                # Phase 4 옵션
+                save_to_db=args.save_db,
+                export_html=args.export_html,
+                export_pdf=args.export_pdf,
+                use_cache=not args.no_cache,
+                cache_days=args.cache_days
+            )
+
     except KeyboardInterrupt:
         logger.info("\n사용자에 의해 중단됨")
         sys.exit(0)
