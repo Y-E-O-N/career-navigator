@@ -165,6 +165,7 @@ export const navigationConfig = {
     { name: '대시보드', href: '/', icon: 'home' },
     { name: '채용공고', href: '/jobs', icon: 'briefcase' },
     { name: '기업정보', href: '/companies', icon: 'building' },
+    { name: '분석 리포트', href: '/reports', icon: 'document' },
     { name: '기술트렌드', href: '/trends', icon: 'trending-up' },
     { name: '커리어 로드맵', href: '/roadmap', icon: 'map' },
   ],
