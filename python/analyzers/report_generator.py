@@ -191,19 +191,24 @@ class ReportGenerator:
         """OpenAI API 호출"""
         model = self.model_config.get('model', 'gpt-4o')
         max_tokens = self.model_config.get('max_tokens', 8000)
-        temperature = self.model_config.get('temperature', 0.7)
+
+        # gpt-5-mini, gpt-5-nano 모델은 temperature를 지원하지 않음
+        supports_temperature = not model.startswith('gpt-5-mini') and not model.startswith('gpt-5-nano')
 
         messages = [{"role": "user", "content": prompt}]
 
         if stream_callback:
             # 스트리밍 모드
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-                temperature=temperature,
-                stream=True
-            )
+            params = {
+                'model': model,
+                'messages': messages,
+                'max_completion_tokens': max_tokens,
+                'stream': True
+            }
+            if supports_temperature:
+                params['temperature'] = self.model_config.get('temperature', 0.7)
+
+            response = self.client.chat.completions.create(**params)
 
             full_response = []
             for chunk in response:
@@ -215,12 +220,15 @@ class ReportGenerator:
             return ''.join(full_response)
         else:
             # 일반 모드
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_completion_tokens=max_tokens,
-                temperature=temperature
-            )
+            params = {
+                'model': model,
+                'messages': messages,
+                'max_completion_tokens': max_tokens
+            }
+            if supports_temperature:
+                params['temperature'] = self.model_config.get('temperature', 0.7)
+
+            response = self.client.chat.completions.create(**params)
             return response.choices[0].message.content
 
     def _call_anthropic(
