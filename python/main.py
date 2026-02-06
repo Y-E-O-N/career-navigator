@@ -952,28 +952,46 @@ def run_scheduler(settings: Settings, db: Database, logger):
 
 
 def run_all(settings: Settings, db: Database, logger, force_analyze: bool = False):
-    """전체 크롤링 실행 (1차 채용공고 + 2차 회사정보)
+    """전체 파이프라인 실행 (크롤링 + 시장 분석 + 리포트)
 
-    분석(analyze)과 리포트(report)는 별도 명령으로 실행해야 합니다.
+    1. 채용공고 크롤링 (1차)
+    2. 회사정보 크롤링 (2차)
+    3. 시장 분석 (키워드별)
+    4. 리포트 생성 (마크다운/HTML)
+
+    Note: 기업 분석(analyze-report)은 별도 명령으로 실행해야 합니다.
     """
     logger.info("=" * 60)
-    logger.info("전체 크롤링 시작 (1차 + 2차)")
+    logger.info("전체 파이프라인 시작")
     logger.info(f"시작 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
 
     start_time = datetime.now()
 
     # 1차 크롤링: 채용공고 수집
-    run_job_crawling(settings, db, logger)
+    job_stats = run_job_crawling(settings, db, logger)
+    total_jobs = job_stats.get('total_found', 0)
 
     # 2차 크롤링: 회사정보 수집
     run_company_crawling(settings, db, logger)
+
+    # 3. 시장 분석
+    if total_jobs > 0 or force_analyze:
+        if force_analyze and total_jobs == 0:
+            logger.info("강제 분석 모드: DB에 있는 기존 데이터로 분석을 실행합니다.")
+        results = run_analysis(settings, db, logger)
+
+        # 4. 리포트 생성
+        if results:
+            generate_reports(settings, db, logger)
+    else:
+        logger.warning("수집된 데이터가 없어 분석을 건너뜁니다. (--force-analyze 옵션으로 강제 실행 가능)")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
     logger.info("=" * 60)
-    logger.info("전체 크롤링 완료")
+    logger.info("전체 파이프라인 완료")
     logger.info(f"소요 시간: {duration:.1f}초")
     logger.info("=" * 60)
 
