@@ -49,7 +49,7 @@ class WantedConfig:
     selector_timeout: int = int(os.getenv("WANTED_SELECTOR_TIMEOUT", "15000"))
 
     # 기타 설정
-    headless: bool = os.getenv("WANTED_HEADLESS", "false").lower() == "true"
+    headless: bool = os.getenv("WANTED_HEADLESS", "true").lower() == "true"
 
 
 @dataclass
@@ -150,7 +150,7 @@ class JobplanetConfig:
     scroll_delay_max: float = float(os.getenv("JOBPLANET_SCROLL_DELAY_MAX", "0.6"))  # 최대 스크롤 간격 (초)
 
     # 브라우저 설정
-    headless: bool = os.getenv("JOBPLANET_HEADLESS", "false").lower() == "true"
+    headless: bool = os.getenv("JOBPLANET_HEADLESS", "true").lower() == "true"
 
     # 로그인 정보
     email: str = os.getenv("JOBPLANET_EMAIL", "")
@@ -173,7 +173,7 @@ class NewsConfig:
     scroll_interval: int = int(os.getenv("NEWS_SCROLL_INTERVAL", "300"))  # 밀리초
 
     # 기타 설정
-    headless: bool = os.getenv("NEWS_HEADLESS", "false").lower() == "true"
+    headless: bool = os.getenv("NEWS_HEADLESS", "true").lower() == "true"
 
 
 @dataclass
