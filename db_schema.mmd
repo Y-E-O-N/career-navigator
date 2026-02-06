@@ -1,0 +1,140 @@
+
+erDiagram
+    companies ||--o{ job_postings : has
+    companies ||--o{ company_reviews : has
+    companies ||--o{ company_interviews : has
+    companies ||--o{ company_benefits : has
+    companies ||--o{ company_salaries : has
+    companies ||--o{ company_news : has
+
+    companies {
+        int id PK
+        string name UK
+        string industry
+        string company_size
+        int founded_year
+        string location
+        text description
+        string website
+        float jobplanet_rating
+        string jobplanet_url
+        int employee_count
+        datetime updated_at
+    }
+
+    job_postings {
+        int id PK
+        int company_id FK
+        string source_site
+        string job_id
+        string title
+        string company_name
+        string job_category
+        string position_level
+        text description
+        json required_skills
+        json preferred_skills
+        string salary_info
+        string location
+        string url
+        datetime crawled_at
+        string status
+    }
+
+    company_reviews {
+        int id PK
+        int company_id FK
+        string company_name
+        string source_site
+        string review_id
+        string job_category
+        float total_rating
+        json category_scores
+        text pros
+        text cons
+        text advice
+        datetime crawled_at
+    }
+
+    company_interviews {
+        int id PK
+        int company_id FK
+        string company_name
+        string source_site
+        string interview_id
+        string job_category
+        string difficulty
+        text question
+        text answer
+        string result
+        datetime crawled_at
+    }
+
+    company_benefits {
+        int id PK
+        int company_id FK
+        string company_name
+        string source_site
+        string category
+        float category_rating
+        text content
+        json item_scores
+        datetime crawled_at
+    }
+
+    company_salaries {
+        int id PK
+        int company_id FK
+        string company_name
+        string source_site
+        string experience_year
+        string position
+        int salary_amount
+        int industry_avg
+        datetime crawled_at
+    }
+
+    company_news {
+        int id PK
+        int company_id FK
+        string company_name
+        string source_site
+        string news_url
+        string title
+        string published_at
+        text content
+        string reporter_name
+        datetime crawled_at
+    }
+
+    skill_trends {
+        int id PK
+        string skill_name
+        string category
+        int mention_count
+        string trend_direction
+        datetime analysis_date
+    }
+
+    crawl_results {
+        int id PK
+        datetime crawl_date
+        string crawl_type
+        string source_site
+        string keyword
+        int total_found
+        int new_count
+        int deleted_count
+        string status
+    }
+
+    market_analysis {
+        int id PK
+        datetime analysis_date
+        string keyword
+        int total_postings
+        json top_companies
+        json top_skills
+        text market_summary
+        text recommendations
+    }
