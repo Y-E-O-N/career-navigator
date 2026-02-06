@@ -44,23 +44,10 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """LLM을 통한 기업 분석 보고서 생성"""
 
-    # 기본 모델 설정
-    MODEL_CONFIG = {
-        'openai': {
-            'model': 'gpt-4o',  # gpt-4o for long context
-            'max_tokens': 8000,
-            'temperature': 0.7,
-        },
-        'anthropic': {
-            'model': 'claude-sonnet-4-20250514',
-            'max_tokens': 8000,
-            'temperature': 0.7,
-        },
-        'gemini': {
-            'model': 'gemini-2.0-flash',
-            'max_tokens': 8000,
-            'temperature': 0.7,
-        }
+    # 기본 설정 (모델은 settings에서 가져옴)
+    DEFAULT_CONFIG = {
+        'max_tokens': 8000,
+        'temperature': 0.7,
     }
 
     def __init__(self, provider: Optional[str] = None):
@@ -70,8 +57,12 @@ class ReportGenerator:
                      미지정 시 settings에서 로드
         """
         self.provider = provider or settings.analyzer.llm_provider
+        self.model = settings.analyzer.llm_model  # .env에서 모델 설정 가져오기
         self.client = None
-        self.model_config = self.MODEL_CONFIG.get(self.provider, {})
+        self.model_config = {
+            'model': self.model,
+            **self.DEFAULT_CONFIG
+        }
         self._init_client()
 
     def _init_client(self):
@@ -80,7 +71,7 @@ class ReportGenerator:
             api_key = settings.analyzer.openai_api_key
             if api_key:
                 self.client = OpenAI(api_key=api_key)
-                logger.info(f"OpenAI client initialized (model: {self.model_config.get('model')})")
+                logger.info(f"OpenAI client initialized (model: {self.model})")
             else:
                 logger.warning("OpenAI API key not set")
 
@@ -88,7 +79,7 @@ class ReportGenerator:
             api_key = settings.analyzer.anthropic_api_key
             if api_key:
                 self.client = anthropic.Anthropic(api_key=api_key)
-                logger.info(f"Anthropic client initialized (model: {self.model_config.get('model')})")
+                logger.info(f"Anthropic client initialized (model: {self.model})")
             else:
                 logger.warning("Anthropic API key not set")
 
@@ -96,7 +87,7 @@ class ReportGenerator:
             api_key = settings.analyzer.gemini_api_key
             if api_key:
                 self.client = genai.Client(api_key=api_key)
-                logger.info(f"Gemini client initialized (model: {self.model_config.get('model')})")
+                logger.info(f"Gemini client initialized (model: {self.model})")
             else:
                 logger.warning("Gemini API key not set")
 

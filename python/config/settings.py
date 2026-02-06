@@ -103,7 +103,8 @@ class DatabaseConfig:
 class AnalyzerConfig:
     """분석기 설정"""
     # LLM API 설정 (Gemini, Anthropic Claude, OpenAI)
-    llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")  # gemini, anthropic, openai
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai")  # gemini, anthropic, openai
+    llm_model: str = os.getenv("LLM_MODEL", "gpt-5-mini")  # 사용할 LLM 모델
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")

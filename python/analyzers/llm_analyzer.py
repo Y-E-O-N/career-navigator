@@ -50,12 +50,14 @@ class LLMAnalyzer:
     
     def _init_client(self):
         """API 클라이언트 초기화"""
+        # 설정에서 모델 가져오기
+        self.model = settings.analyzer.llm_model
+
         if self.provider == "gemini" and GEMINI_AVAILABLE:
             api_key = settings.analyzer.gemini_api_key
             if api_key:
                 self.client = genai.Client(api_key=api_key)
-                self.gemini_model = 'gemini-3-flash-preview'
-                self.logger.info("Initialized Gemini client")
+                self.logger.info(f"Initialized Gemini client (model: {self.model})")
             else:
                 self.logger.warning("Gemini API key not set")
 
@@ -63,7 +65,7 @@ class LLMAnalyzer:
             api_key = settings.analyzer.anthropic_api_key
             if api_key:
                 self.client = anthropic.Anthropic(api_key=api_key)
-                self.logger.info("Initialized Anthropic client")
+                self.logger.info(f"Initialized Anthropic client (model: {self.model})")
             else:
                 self.logger.warning("Anthropic API key not set")
 
@@ -71,8 +73,7 @@ class LLMAnalyzer:
             api_key = settings.analyzer.openai_api_key
             if api_key:
                 self.client = OpenAI(api_key=api_key)
-                self.openai_model = 'gpt-5-nano'
-                self.logger.info(f"Initialized OpenAI client (model: {self.openai_model})")
+                self.logger.info(f"Initialized OpenAI client (model: {self.model})")
             else:
                 self.logger.warning("OpenAI API key not set")
         else:
@@ -89,9 +90,9 @@ class LLMAnalyzer:
                 if self.provider == "gemini":
                     # Gemini - 새 google.genai API 사용
                     full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-                    self.logger.debug(f"Calling Gemini model: {self.gemini_model} (attempt {attempt + 1})")
+                    self.logger.debug(f"Calling Gemini model: {self.model} (attempt {attempt + 1})")
                     response = self.client.models.generate_content(
-                        model=self.gemini_model,
+                        model=self.model,
                         contents=full_prompt,
                         config=types.GenerateContentConfig(
                             max_output_tokens=max_tokens,
@@ -108,7 +109,7 @@ class LLMAnalyzer:
 
                 elif self.provider == "anthropic":
                     message = self.client.messages.create(
-                        model="claude-sonnet-4-20250514",
+                        model=self.model,
                         max_tokens=max_tokens,
                         system=system_prompt,
                         messages=[
@@ -124,7 +125,7 @@ class LLMAnalyzer:
                     messages.append({"role": "user", "content": prompt})
 
                     response = self.client.chat.completions.create(
-                        model=self.openai_model,
+                        model=self.model,
                         max_completion_tokens=max_tokens,
                         messages=messages
                     )
