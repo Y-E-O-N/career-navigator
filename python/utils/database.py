@@ -3,9 +3,10 @@
 SQLite (로컬) 및 PostgreSQL (클라우드) 지원
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, JSON, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, JSON, Boolean, ForeignKey, ARRAY, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 from typing import Optional, List
 import pytz
@@ -350,6 +351,57 @@ class CompanyNews(Base):
 
     # 메타
     crawled_at = Column(DateTime, default=get_kst_now)
+
+
+class CompanyReport(Base):
+    """기업 분석 보고서 테이블"""
+    __tablename__ = 'company_reports'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 회사 및 채용공고 연결
+    company_id = Column(Integer, ForeignKey('companies.id', ondelete='SET NULL'))
+    company_name = Column(String(200), nullable=False)
+    job_posting_id = Column(Integer)  # FK 제거 (스키마 호환성)
+
+    # 보고서 메타데이터
+    report_version = Column(String(20), default='v4')
+    llm_provider = Column(String(50))
+    llm_model = Column(String(100))
+
+    # 분석 결과
+    verdict = Column(String(50))  # Go, Conditional Go, No-Go
+    total_score = Column(Numeric(3, 2))  # 0.00 ~ 5.00
+    scores = Column(JSON)  # 개별 평가축 점수
+
+    # 핵심 요약
+    key_attractions = Column(JSON)  # 핵심 매력 포인트 (배열)
+    key_risks = Column(JSON)  # 핵심 리스크 (배열)
+    verification_items = Column(JSON)  # [확인 필요] 항목 (배열)
+
+    # 보고서 본문
+    full_markdown = Column(Text)
+    full_html = Column(Text)
+
+    # Quality Gate 결과
+    quality_passed = Column(Boolean, default=False)
+    quality_details = Column(JSON)
+
+    # 데이터 소스 정보
+    data_sources = Column(JSON)
+
+    # 지원자 컨텍스트 (선택)
+    applicant_profile = Column(JSON)
+    priority_weights = Column(JSON)
+
+    # 캐시 관리
+    cache_key = Column(String(255), unique=True)
+    cache_expires_at = Column(DateTime)
+
+    # 타임스탬프
+    generated_at = Column(DateTime, default=get_kst_now)
+    created_at = Column(DateTime, default=get_kst_now)
+    updated_at = Column(DateTime, default=get_kst_now)
 
 
 class Database:
