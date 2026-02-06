@@ -4,6 +4,7 @@ import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import config from '@/config';
 import type { JobPosting } from '@/lib/supabase/types';
+import AnalyzeCompanyButton from '@/components/AnalyzeCompanyButton';
 
 // ISR 재검증 주기 (초)
 export const revalidate = 3600;
@@ -152,6 +153,10 @@ export default async function JobsPage({ searchParams }: JobsPageProps) {
                   <span className="text-xs text-gray-400">
                     {new Date(job.crawled_at).toLocaleDateString('ko-KR')}
                   </span>
+                  <AnalyzeCompanyButton
+                    companyName={job.company_name}
+                    companyId={job.company_id}
+                  />
                   {job.url && (
                     <a
                       href={job.url}
