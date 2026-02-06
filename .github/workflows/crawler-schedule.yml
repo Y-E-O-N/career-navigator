@@ -2,8 +2,8 @@ name: Scheduled Crawler
 
 on:
   schedule:
-    # 매일 한국 시간 09:00 (UTC 00:00)
-    - cron: '0 0 * * *'
+    # 매일 한국 시간 23:00 (UTC 14:00)
+    - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       command:

@@ -118,7 +118,7 @@ class AnalyzerConfig:
 class SchedulerConfig:
     """스케줄러 설정"""
     enabled: bool = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
-    schedule_time: str = os.getenv("SCHEDULER_TIME", "09:00")  # 매일 실행 시간
+    schedule_time: str = os.getenv("SCHEDULER_TIME", "23:00")  # 매일 실행 시간 (KST)
     timezone: str = "Asia/Seoul"
 
 
