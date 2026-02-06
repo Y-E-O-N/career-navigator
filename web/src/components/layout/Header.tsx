@@ -52,6 +52,12 @@ export default function Header() {
               기업정보
             </Link>
             <Link
+              href="/reports"
+              className="text-gray-600 hover:text-primary-600 transition-colors"
+            >
+              분석 리포트
+            </Link>
+            <Link
               href="/trends"
               className="text-gray-600 hover:text-primary-600 transition-colors"
             >
@@ -128,6 +134,13 @@ export default function Header() {
                 onClick={() => setIsMobileMenuOpen(false)}
               >
                 기업정보
+              </Link>
+              <Link
+                href="/reports"
+                className="px-3 py-2 rounded-md text-gray-600 hover:text-primary-600 hover:bg-gray-50"
+                onClick={() => setIsMobileMenuOpen(false)}
+              >
+                분석 리포트
               </Link>
               <Link
                 href="/trends"
