@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS company_reports (
     -- 회사 및 채용공고 연결
     company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
     company_name VARCHAR(200) NOT NULL,
-    job_posting_id INTEGER REFERENCES job_postings(id) ON DELETE SET NULL,
+    job_posting_id INTEGER,  -- FK 제거 (job_postings.id에 unique constraint 없음)
 
     -- 보고서 메타데이터
     report_version VARCHAR(20) DEFAULT 'v4',
@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS company_reports (
 -- 인덱스
 CREATE INDEX IF NOT EXISTS idx_company_reports_company_id ON company_reports(company_id);
 CREATE INDEX IF NOT EXISTS idx_company_reports_company_name ON company_reports(company_name);
-CREATE INDEX IF NOT EXISTS idx_company_reports_job_posting_id ON company_reports(job_posting_id);
 CREATE INDEX IF NOT EXISTS idx_company_reports_cache_key ON company_reports(cache_key);
 CREATE INDEX IF NOT EXISTS idx_company_reports_generated_at ON company_reports(generated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_company_reports_verdict ON company_reports(verdict);
