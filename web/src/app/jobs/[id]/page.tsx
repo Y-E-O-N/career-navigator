@@ -4,6 +4,7 @@ import Badge from '@/components/ui/Badge';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { JobPosting } from '@/lib/supabase/types';
+import AnalyzeCompanyButton from '@/components/AnalyzeCompanyButton';
 
 interface JobDetailPageProps {
   params: Promise<{ id: string }>;
@@ -100,6 +101,10 @@ export default async function JobDetailPage({ params }: JobDetailPageProps) {
                 </svg>
               </a>
             )}
+            <AnalyzeCompanyButton
+              companyName={job.company_name}
+              companyId={job.company_id}
+            />
             <span className="text-xs text-gray-400 text-center">
               수집일: {new Date(job.crawled_at).toLocaleDateString('ko-KR')}
             </span>
